@@ -13,16 +13,20 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-def create_tables():
-    """Create all EODHD tables in QuestDB"""
-    
+def create_tables(schema_name: str = 'schemas.sql'):
+    """Create tables in QuestDB from a schema file"""
+
     # Read schema file
-    schema_file = os.path.join(os.path.dirname(__file__), 'schemas.sql')
+    schema_file = os.path.join(os.path.dirname(__file__), schema_name)
     with open(schema_file, 'r') as f:
         schema_sql = f.read()
-    
+
+    # Strip '--' comments before splitting: a semicolon inside a comment would
+    # otherwise be treated as a statement boundary and produce invalid SQL.
+    body = '\n'.join(line.split('--')[0] for line in schema_sql.splitlines())
+
     # Split into individual statements
-    statements = [s.strip() for s in schema_sql.split(';') if s.strip()]
+    statements = [s.strip() for s in body.split(';') if s.strip()]
     
     try:
         # Connect to QuestDB
@@ -53,18 +57,16 @@ def create_tables():
         logger.info("✅ All tables created successfully!")
         logger.info("="*70)
         
-        # List created tables
-        logger.info("\nCreated tables:")
-        logger.info("  1. eodhd_stock_data")
-        logger.info("  2. eodhd_fundamentals")
-        logger.info("  3. eodhd_corporate_actions")
-        logger.info("  4. eodhd_calendar_events")
-        logger.info("  5. eodhd_metadata")
-        logger.info("  6. eodhd_stock_metadata (for update mode)")
-        
     except Exception as e:
         logger.error(f"Failed to create tables: {e}")
         raise
 
 if __name__ == "__main__":
-    create_tables()
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Create QuestDB tables from a schema file")
+    parser.add_argument('--schema', default='schemas.sql',
+                        help="Schema file in db/ (e.g. schemas_yfinance.sql)")
+    args = parser.parse_args()
+
+    create_tables(args.schema)

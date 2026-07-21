@@ -61,18 +61,25 @@ deployments:
         timezone: "Asia/Jakarta"
         active: true
 
-  # Weekly QuestDB local backup — creates a tar.gz you can copy to another machine
+  # Weekly QuestDB local backup — gated by a deep integrity check, and the archive
+  # is read back before old backups are rotated out.
+  # ACTIVE: as EODHD is wound down, this archive becomes the only copy of the
+  # pre-2005 history (321,259 rows across 175 symbols) that yfinance cannot re-serve.
   - name: questdb-backup
     entrypoint: flows/backup_flow.py:questdb_backup_flow
-    description: "Weekly QuestDB backup — consistent snapshot compressed to tar.gz in ./backups/"
+    description: "Weekly QuestDB backup — integrity-gated, archive verified, manifest written"
     work_pool:
       name: default-agent-pool
+    concurrency_limit:
+      limit: 1
+      collision_strategy: CANCEL_NEW
     parameters:
       keep_local_backups: 3
+      deep_check: true
     schedules:
       - cron: "30 16 * * 0"   # weekly every Sunday at 16:30 WIB
         timezone: "Asia/Jakarta"
-        active: false          # enable when ready
+        active: true
 
   # Daily gap check & auto-fill — safety net after market close
   - name: gap-check
@@ -147,6 +154,44 @@ deployments:
       run_partitions: true
     schedules:
       - cron: "30 8 * * 6"   # Saturday 08:30 WIB — AFTER gap-check (08:00) fills the week's gaps
+        timezone: "Asia/Jakarta"
+        active: true
+
+  # Weekly yfinance fundamentals sweep — financial statements, profiles, analyst estimates.
+  # Heaviest yfinance job (~9 requests/symbol), so it runs once a week and AFTER the
+  # Saturday price jobs (gap-check 08:00, data-quality 08:30) rather than alongside them.
+  - name: fundamentals-sweep
+    entrypoint: flows/fundamentals_flow.py:fundamentals_flow
+    description: "Weekly yfinance fundamentals: statements, profiles, analyst estimates"
+    work_pool:
+      name: default-agent-pool
+    concurrency_limit:
+      limit: 1
+      collision_strategy: CANCEL_NEW
+    parameters:
+      stocks_file: config/syariah_stocks.txt
+      include_profiles: true
+      include_analyst: true
+    schedules:
+      - cron: "0 10 * * 6"   # Saturday 10:00 WIB — after data-quality (08:30)
+        timezone: "Asia/Jakarta"
+        active: true
+
+  # Daily valuation snapshot — 1 request/symbol. This is the table that ACCUMULATES
+  # what yfinance discards: marketCap/PE/PBV are point-in-time and unrecoverable
+  # once they change, so a missed day is a permanent hole.
+  - name: valuation-snapshot
+    entrypoint: flows/fundamentals_flow.py:valuation_flow
+    description: "Daily yfinance valuation snapshot (marketCap, PE, PBV, ROE)"
+    work_pool:
+      name: default-agent-pool
+    concurrency_limit:
+      limit: 1
+      collision_strategy: CANCEL_NEW
+    parameters:
+      stocks_file: config/syariah_stocks.txt
+    schedules:
+      - cron: "0 21 * * 1-5"   # Mon-Fri 21:00 WIB — after bulk-eod (20:30)
         timezone: "Asia/Jakarta"
         active: true
 

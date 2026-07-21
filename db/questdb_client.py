@@ -7,7 +7,7 @@ import psycopg2
 from psycopg2 import pool
 from psycopg2.extras import execute_batch
 from typing import List, Dict, Optional, Set, Tuple
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 import logging
 import time
 import threading
@@ -33,6 +33,51 @@ from config.db_config import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Corporate actions predate nothing on IDX before the mid-90s (oldest real action
+# on record: 1995-06-02), so the whole of 1970 can be treated as invalid. That
+# catches epoch zero and anything landing near it.
+_MIN_ACTION_YEAR = 1971
+
+
+def _coerce_action_date(value):
+    """
+    Normalise a corporate-action date, returning (date, None) or (None, reason).
+
+    Accepts date, datetime and 'YYYY-MM-DD' strings, because callers legitimately
+    differ: the EODHD collectors hand over `date` objects while an API payload or a
+    future collector may pass the raw string.
+
+    The two rejection reasons are kept distinct on purpose. 'implausible' means bad
+    data from upstream; 'unparseable' means a caller passed the wrong type, which is
+    a code bug. An earlier version of this guard used getattr(value, 'year', 0) and
+    so scored a valid '2026-05-13' string as year 0 — silently discarding good data
+    while logging it as an epoch-zero data problem.
+    """
+    if value is None:
+        return None, 'implausible'
+
+    if isinstance(value, str):
+        # An empty string is how APIs spell "no value"; that is absent data, not a
+        # caller passing the wrong type, and must not raise a code-bug alarm.
+        if not value.strip():
+            return None, 'implausible'
+        try:
+            value = datetime.strptime(value[:10], '%Y-%m-%d')
+        except (ValueError, TypeError):
+            return None, 'unparseable'
+
+    if isinstance(value, datetime):
+        value = value.date()
+
+    if not isinstance(value, date):
+        return None, 'unparseable'
+
+    # A dividend may be declared for next year, but not beyond that.
+    if value.year < _MIN_ACTION_YEAR or value.year > datetime.now().year + 1:
+        return None, 'implausible'
+
+    return value, None
 
 
 class QuestDBClient:
@@ -615,10 +660,18 @@ class QuestDBClient:
                 raise
     
     def insert_corporate_actions(self, records: List[Dict]):
-        """Insert corporate actions (dividends/splits)"""
+        """
+        Insert corporate actions (dividends/splits).
+
+        Rejects rows whose action_date is missing or at epoch zero. Each collector
+        already guards its own parsing, but this table accumulated 324,780 BRIS.JK
+        rows dated 1970-01-01 from an earlier code path, so the guard belongs at the
+        single point every writer passes through rather than in each caller.
+        A dividend with no date is not a dividend — dropping it loses nothing.
+        """
         if not records:
             return
-        
+
         sql = f"""
         INSERT INTO {TABLE_CORPORATE_ACTIONS}
         (symbol, action_type, action_date, dividend_amount, dividend_currency,
@@ -626,13 +679,22 @@ class QuestDBClient:
          split_ratio, split_from, split_to, created_at)
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """
-        
+
         values = []
+        unparseable = 0
+        implausible = 0
         for record in records:
+            action_date, reason = _coerce_action_date(record.get('action_date'))
+            if action_date is None:
+                if reason == 'unparseable':
+                    unparseable += 1
+                else:
+                    implausible += 1
+                continue
             values.append((
                 record['symbol'],
                 record['action_type'],
-                record['action_date'],
+                action_date,
                 record.get('dividend_amount'),
                 record.get('dividend_currency'),
                 record.get('payment_date'),
@@ -644,49 +706,94 @@ class QuestDBClient:
                 record.get('split_to'),
                 datetime.now()
             ))
-        
+
+        # Reported separately: an implausible date is bad data from upstream, an
+        # unparseable one is a caller passing the wrong type. Collapsing them hides
+        # a code bug behind a data-quality message.
+        if implausible:
+            logger.warning(f"Rejected {implausible} corporate action record(s) with "
+                           f"missing or implausible action_date")
+        if unparseable:
+            logger.error(f"Rejected {unparseable} corporate action record(s) whose "
+                         f"action_date could not be interpreted as a date — check the "
+                         f"caller, it is passing the wrong type")
+        if not values:
+            return
+
         try:
             execute_batch(self.cursor, sql, values, page_size=BATCH_INSERT_SIZE)
-            logger.info(f"Inserted {len(records)} corporate action records")
+            logger.info(f"Inserted {len(values)} corporate action records")
         except Exception as e:
             logger.error(f"Failed to insert corporate actions: {e}")
             raise
     
     def insert_or_update_metadata(self, symbol: str, data: Dict):
-        """Insert or update stock metadata"""
+        """
+        Insert or update stock metadata — one row per symbol.
+
+        This table is current state (name, sector, is_active), not a time series, so
+        it has no business date and QuestDB cannot deduplicate it: the dedup key must
+        include the designated timestamp, and that is the insert time. An earlier
+        version simply appended ("QuestDB doesn't support UPSERT easily"), which grew
+        the table to 192,598 rows describing 953 symbols. Doing the upsert here is the
+        only place it can be done, and mirrors upsert_stock_metadata().
+
+        Descriptive fields are only overwritten when the caller actually supplies
+        them. Most callers pass none, and blanking a name that another collector
+        populated is how the accumulated rows ended up almost entirely empty.
+        """
         if not data:
             return
-        
-        # Simple insert (QuestDB doesn't support UPSERT easily)
-        # We'll just insert new records
+
         try:
-            sql = f"""
-            INSERT INTO {TABLE_METADATA}
-            (symbol, exchange, name, sector, industry, currency,
-             last_price_update, has_dividends, is_active, created_at, updated_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """
-            
+            self.ensure_connection()
             now = datetime.now()
-            values = (
-                symbol,
-                data.get('exchange', 'JK'),
-                data.get('name', ''),
-                data.get('sector', ''),
-                data.get('industry', ''),
-                data.get('currency', 'IDR'),
-                data.get('last_price_update', now),
-                data.get('has_dividends', False),
-                True,  # is_active
-                now,
-                now
+
+            self.cursor.execute(
+                f"SELECT updated_at FROM {TABLE_METADATA} WHERE symbol = %s "
+                f"ORDER BY updated_at DESC LIMIT 1",
+                (symbol,)
             )
-            
-            try:
-                self.cursor.execute(sql, values)
-                logger.debug(f"Inserted metadata for {symbol}")
-            except Exception as e:
-                logger.error(f"Failed to insert metadata for {symbol}: {e}")
-                raise
+            existing = self.cursor.fetchone()
+
+            if existing:
+                sets = ['last_price_update = %s', 'is_active = %s']
+                values = [data.get('last_price_update', now), True]
+                if 'has_dividends' in data:
+                    sets.append('has_dividends = %s')
+                    values.append(data['has_dividends'])
+                for column in ('exchange', 'name', 'sector', 'industry', 'currency'):
+                    value = data.get(column)
+                    if value:
+                        sets.append(f'{column} = %s')
+                        values.append(value)
+
+                values.extend([symbol, existing[0]])
+                self.cursor.execute(
+                    f"UPDATE {TABLE_METADATA} SET {', '.join(sets)} "
+                    f"WHERE symbol = %s AND updated_at = %s",
+                    values
+                )
+            else:
+                self.cursor.execute(
+                    f"""INSERT INTO {TABLE_METADATA}
+                        (symbol, exchange, name, sector, industry, currency,
+                         last_price_update, has_dividends, is_active, created_at, updated_at)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                    (
+                        symbol,
+                        data.get('exchange', 'JK'),
+                        data.get('name', ''),
+                        data.get('sector', ''),
+                        data.get('industry', ''),
+                        data.get('currency', 'IDR'),
+                        data.get('last_price_update', now),
+                        data.get('has_dividends', False),
+                        True,
+                        now,
+                        now,
+                    )
+                )
+            logger.debug(f"Upserted metadata for {symbol}")
         except Exception as e:
-            logger.error(f"Failed to insert/update metadata: {e}")
+            logger.warning(f"Could not upsert metadata for {symbol}: {e}")
