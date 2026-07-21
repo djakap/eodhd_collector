@@ -7,6 +7,7 @@ import psycopg2
 from psycopg2 import pool
 from psycopg2.extras import execute_batch
 from typing import List, Dict, Optional, Set, Tuple
+from collections import Counter
 from datetime import date, datetime, timedelta, timezone
 import logging
 import time
@@ -31,6 +32,7 @@ from config.db_config import (
     QUESTDB_HOST,
     QUESTDB_INFLUX_PORT
 )
+from utils.bar_rules import describe_rejection
 
 logger = logging.getLogger(__name__)
 
@@ -483,6 +485,42 @@ class QuestDBClient:
             # Safe fallback: treat all as stale
             return {'fresh': [], 'stale': list(symbols), 'unknown': []}
     
+    def _screen_records(self, records, table):
+        """
+        Last checkpoint before a row reaches the table.
+
+        Placed here rather than in the collectors because this is the one function
+        every price writer already calls — collectors, flows and the loose backfill
+        scripts alike. Fixing the rules at each call site was tried and did not
+        hold: the next writer reimplemented the old behaviour, which is how four
+        files ended up with seventeen copies of the same three rules.
+
+        Only the empty-bar case is dropped, and that only because it was verified
+        against the whole table: of 3,875,539 all-NULL rows, not one carries volume.
+        Everything else is REPORTED AND KEPT. A gate that silently discards rows
+        trades corruption for invisible data loss, and absence cannot be detected
+        or repaired later the way a bad value can. If the counts below turn out to
+        be large or surprising, the rule is wrong — not the data.
+        """
+        if not records or isinstance(records[0], dict):
+            return records
+
+        kept, reasons = [], Counter()
+        for rec in records:
+            reason = describe_rejection(rec)
+            if reason is None:
+                kept.append(rec)
+            elif reason.startswith('bar kosong'):
+                reasons[reason] += 1          # dropped: proven to carry nothing
+            else:
+                reasons[f'{reason} (TETAP DITULIS)'] += 1
+                kept.append(rec)
+
+        if reasons:
+            summary = ', '.join(f'{r}: {n}' for r, n in reasons.most_common())
+            logger.warning(f"[{table}] penyaringan {len(records)} baris -> {summary}")
+        return kept
+
     def insert_price_data(self, records, table: Optional[str] = None):
         """
         Insert price data records using ILP (fastest) or SQL fallback
@@ -501,6 +539,9 @@ class QuestDBClient:
             return
 
         table = table or TABLE_STOCK_DATA
+        records = self._screen_records(records, table)
+        if not records:
+            return
 
         # Try ILP first (10-100x faster) if enabled
         if self.use_ilp and QuestDBClient._use_ilp:

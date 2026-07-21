@@ -16,6 +16,7 @@ import pandas as pd
 from api.eodhd_client import EODHDClient
 from db.questdb_client import QuestDBClient
 from utils.data_filter import filter_and_validate
+from utils.bar_rules import to_utc_naive, is_empty_bar
 from config.eodhd_config import INTRADAY_INTERVALS, EOD_PERIODS, INTRADAY_MAX_DAYS
 
 logger = logging.getLogger(__name__)
@@ -311,22 +312,13 @@ class PriceCollector:
                 else:
                     skipped_duplicates = 0
                 
-                # Smart NULL filtering with market hours check
-                # Extract hour for market hours check
-                df['hour'] = df['datetime'].dt.hour
-                
-                # Identify records with NULL values
-                df['has_null'] = df[['open', 'high', 'low', 'close']].isna().any(axis=1)
-                
-                # Keep records that are: (not null) OR (null during market hours 9-16)
-                df['is_market_hours'] = (df['hour'] >= 9) & (df['hour'] < 16)
-                df['keep'] = ~df['has_null'] | (df['has_null'] & df['is_market_hours'])
-                
-                # Count nulls filtered out
-                skipped_nulls = len(df[df['has_null'] & ~df['is_market_hours']])
-                
-                # Filter
-                df = df[df['keep']]
+                # Drop bars with no OHLC at all. The previous rule kept or dropped
+                # them by hour, comparing WIB bounds (9..16) against these UTC
+                # timestamps — inverted, so it admitted the empty 16:00 WIB bar and
+                # would have dropped genuine ones. See utils/bar_rules.
+                df['is_empty'] = df[['open', 'high', 'low', 'close']].isna().all(axis=1)
+                skipped_nulls = int(df['is_empty'].sum())
+                df = df[~df['is_empty']]
                 
                 # Convert to records (tuples for database insert)
                 records = []
@@ -366,19 +358,12 @@ class PriceCollector:
                         volumes = np.array([item.get('volume') for item in data if item.get('timestamp')])
                         gmtoffsets = np.array([item.get('gmtoffset') for item in data if item.get('timestamp')])
                         
-                        # Vectorized NULL check
-                        has_nulls = np.isnan(opens.astype(float)) | np.isnan(highs.astype(float)) | \
-                                   np.isnan(lows.astype(float)) | np.isnan(closes.astype(float))
-                        
-                        # Vectorized hour extraction
-                        hours = np.array([datetime.fromtimestamp(ts).hour for ts in ts_array])
-                        is_market_hours = (hours >= 9) & (hours < 16)
-                        
-                        # Keep records that are: (not null) OR (null during market hours)
-                        keep_mask = ~has_nulls | (has_nulls & is_market_hours)
-                        
-                        # Count skipped
-                        skipped_nulls = np.sum(has_nulls & ~is_market_hours)
+                        # Empty bars only — all four OHLC absent. No hour test: it
+                        # was inverted, and the hour is not what makes a bar useless.
+                        is_empty = np.isnan(opens.astype(float)) & np.isnan(highs.astype(float)) & \
+                                   np.isnan(lows.astype(float)) & np.isnan(closes.astype(float))
+                        keep_mask = ~is_empty
+                        skipped_nulls = int(np.sum(is_empty))
                         
                         # Build records from filtered data
                         records = []
@@ -386,7 +371,7 @@ class PriceCollector:
                         skipped_duplicates = 0
                         
                         for idx in np.where(keep_mask)[0]:
-                            timestamp = datetime.fromtimestamp(ts_array[idx])
+                            timestamp = to_utc_naive(ts_array[idx])
                             
                             # Duplicate check
                             if use_duplicate_detection and timestamp in existing_timestamps:
@@ -427,24 +412,23 @@ class PriceCollector:
                         if not ts:
                             continue
                         
-                        timestamp = datetime.fromtimestamp(ts)
-                        
+                        timestamp = to_utc_naive(ts)
+                        if timestamp is None:
+                            continue
+
                         # Duplicate check
                         if use_duplicate_detection and timestamp in existing_timestamps:
                             skipped_duplicates += 1
                             continue
-                        
-                        # Smart NULL filtering
-                        has_null = not all([item.get('open'), item.get('high'), 
-                                           item.get('low'), item.get('close')])
-                        
-                        if has_null:
-                            hour = timestamp.hour
-                            is_market_hours = 9 <= hour < 16
-                            if not is_market_hours:
-                                skipped_nulls += 1
-                                continue
-                        
+
+                        # Empty bars only. The old test used `not all([...])`, which
+                        # also rejected a legitimate price of 0 and any partially
+                        # populated bar, then gated that on an inverted hour check.
+                        if is_empty_bar(item.get('open'), item.get('high'),
+                                        item.get('low'), item.get('close')):
+                            skipped_nulls += 1
+                            continue
+
                         # Append directly (single iteration)
                         records.append((
                             symbol,
