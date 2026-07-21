@@ -22,11 +22,18 @@ Three rules, each with the evidence behind it:
    needed: an all-NULL row carries no information at any hour. Removing it removes
    the timezone dependency, and with it a whole class of bug.
 
-   The test is deliberately narrow. Verified across all 27.8M rows on 2026-07-21:
-   3,875,539 rows have all four OHLC fields NULL and NOT ONE of them carries
-   volume, so dropping them loses nothing. But 1,274,415 rows have full OHLC with
-   a NULL volume — EODHD genuinely returns volume: null — and those are real bars.
-   A rule phrased as "reject rows containing a NULL" would destroy all of them.
+   The test is deliberately narrow, in both directions, and each narrowing was
+   paid for. Verified across all 27.8M rows on 2026-07-21: 3,875,539 rows have all
+   four OHLC fields NULL and NOT ONE carries volume, so dropping them loses
+   nothing. But 1,274,415 rows have full OHLC with a NULL volume — EODHD genuinely
+   returns volume: null — and those are real bars. A rule phrased as "reject rows
+   containing a NULL" would destroy all of them.
+
+   Volume then had to enter the emptiness test itself, at the cost of 17,699 rows
+   discovered missing during the rebuild. The sentinel repair converts EODHD's
+   999999.9999 placeholder to NULL, which manufactures all-NULL rows that DO carry
+   volume — a case that could not exist in the collected data and so was not
+   covered. See is_empty_bar.
 
 3. THE INTERVAL MUST BE ONE WE KNOW.
    utils/aggregate_4h wrote 17,321 rows under the interval name '4h_null', every
@@ -57,6 +64,7 @@ SENTINEL_MIN = 999999.0
 # Tuple layout used by QuestDBClient.insert_price_data.
 IDX_INTERVAL, IDX_TIMESTAMP = 1, 2
 IDX_OPEN, IDX_HIGH, IDX_LOW, IDX_CLOSE = 3, 4, 5, 6
+IDX_VOLUME = 8
 
 
 def to_utc_naive(epoch_seconds) -> Optional[datetime]:
@@ -76,15 +84,25 @@ def to_utc_naive(epoch_seconds) -> Optional[datetime]:
         return None
 
 
-def is_empty_bar(open_, high, low, close) -> bool:
+def is_empty_bar(open_, high, low, close, volume=None) -> bool:
     """
-    True when all four OHLC fields are absent — no information at any hour.
+    True when the row carries nothing: no OHLC and no volume.
 
-    Volume is deliberately not consulted: a bar with prices and a NULL volume is
-    real and common (1,274,415 rows), while no all-NULL bar in the table carries
-    volume, so consulting it would only risk false positives.
+    Volume is part of the test, and that detail cost 17,699 rows before it was.
+    The original justification for ignoring it was that no all-NULL row in the
+    table carried volume — true of the data as collected, but the sentinel repair
+    CREATES all-NULL rows that do: EODHD's 999999.9999 placeholder sits on rows
+    whose volume is genuine (14,138 of 14,138 weekly ones). Converting those
+    prices to NULL and then applying an OHLC-only emptiness test silently
+    discarded them, which is precisely the invisible data loss this gate exists
+    to avoid.
+
+    A bar with prices and a NULL volume stays too — that is real and common
+    (1,274,415 rows), because EODHD genuinely returns volume: null.
     """
-    return open_ is None and high is None and low is None and close is None
+    if not (open_ is None and high is None and low is None and close is None):
+        return False
+    return volume is None or float(volume) == 0
 
 
 def has_sentinel_price(open_, high, low, close) -> bool:
@@ -107,6 +125,7 @@ def describe_rejection(record) -> Optional[str]:
         ts = record[IDX_TIMESTAMP]
         o, h, l, c = (record[IDX_OPEN], record[IDX_HIGH],
                       record[IDX_LOW], record[IDX_CLOSE])
+        vol = record[IDX_VOLUME]
     except (IndexError, TypeError):
         return 'bentuk record tidak dikenal'
 
@@ -116,7 +135,7 @@ def describe_rejection(record) -> Optional[str]:
         return f'timestamp bukan datetime: {type(ts).__name__}'
     if ts.tzinfo is not None:
         return 'timestamp harus naive UTC, bukan tz-aware'
-    if is_empty_bar(o, h, l, c):
+    if is_empty_bar(o, h, l, c, vol):
         return 'bar kosong (OHLC seluruhnya NULL)'
     if has_sentinel_price(o, h, l, c):
         # Reported, not dropped: the row may carry a genuine volume and date, and

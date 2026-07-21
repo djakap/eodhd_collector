@@ -97,28 +97,38 @@ class Audit:
 
     # ------------------------------------------------------------------
     def null_rows(self, ivs):
-        hr("2. BARIS KOSONG (OHLC seluruhnya NULL)")
-        print(f"{'interval':10s} {'all-NULL':>12s} {'%':>6s} {'punya volume>0':>15s}  keputusan")
-        grand = 0
+        hr("2. BARIS TANPA OHLC")
+        print("  Dua hal berbeda, dan membedakannya penting:")
+        print("    KOSONG        tanpa OHLC dan tanpa volume — tidak berisi apa pun.")
+        print("    HARGA HILANG  tanpa OHLC tapi VOLUMENYA NYATA. Ini hasil perbaikan")
+        print("                  sentinel 999999.9999, bukan cacat: harganya memang")
+        print("                  tidak disediakan EODHD, sementara volumenya asli.\n")
+        print(f"{'interval':10s} {'kosong':>10s} {'harga hilang':>14s}  catatan")
+        grand_empty = grand_priceless = 0
         for iv in ivs:
             n = self.one(f'SELECT count() FROM "{self.table}" WHERE interval = %s AND {OHLC_NULL}', (iv,))
             if not n:
                 continue
-            tot = self.one(f'SELECT count() FROM "{self.table}" WHERE interval = %s', (iv,))
             vol = self.one(f'SELECT count() FROM "{self.table}" WHERE interval = %s '
                            f'AND {OHLC_NULL} AND volume IS NOT NULL AND volume > 0', (iv,))
-            grand += n
-            verdict = "aman dibuang" if vol == 0 else "JANGAN DIBUANG — ada volume"
-            print(f"{iv:10s} {n:>12,} {n/tot*100:>5.1f}% {vol:>15,}  {verdict}")
-            self.note('baris kosong', n, f"interval={iv}, volume>0: {vol}")
-        print(f"{'TOTAL':10s} {grand:>12,}")
+            empty = n - vol
+            grand_empty += empty
+            grand_priceless += vol
+            note = "" if empty == 0 else "  <-- harus 0 setelah pembersihan"
+            print(f"{iv:10s} {empty:>10,} {vol:>14,}{note}")
+            # Only the truly empty ones are an anomaly. Counting the repaired rows
+            # here would make the daily audit report its own fix as damage, forever.
+            if empty:
+                self.note('baris kosong', empty, f"interval={iv}")
+        print(f"{'TOTAL':10s} {grand_empty:>10,} {grand_priceless:>14,}")
+        if grand_priceless:
+            print(f"\n  {grand_priceless:,} baris 'harga hilang' DIPERTAHANKAN dengan sengaja.")
 
         # the counterpart that must NOT be swept up with them
         keep = self.one(f'SELECT count() FROM "{self.table}" '
                         f'WHERE close IS NOT NULL AND volume IS NULL')
-        print(f"\n  Pembanding — OHLC ADA tapi volume NULL: {keep:,} baris.")
-        print(f"  Baris ini SAH dan harus dipertahankan. Aturan yang berbunyi 'tolak baris")
-        print(f"  yang mengandung NULL' akan membunuh semuanya.")
+        print(f"  Pembanding — OHLC ADA tapi volume NULL: {keep:,} baris, juga sah.")
+
 
     # ------------------------------------------------------------------
     def sentinel_prices(self, ivs):
