@@ -195,6 +195,43 @@ deployments:
         timezone: "Asia/Jakarta"
         active: true
 
+  # yfinance price backfill — one-off seed of the shadow table with all history
+  # Yahoo offers (decades of d/w/m, ~700 days of 1h). Manual only: it takes ~40
+  # minutes and never needs repeating, since update runs keep it current.
+  - name: yfinance-price-backfill
+    entrypoint: flows/yfinance_price_flow.py:backfill_flow
+    description: "One-off: seed yf_stock_data with full yfinance history"
+    work_pool:
+      name: default-agent-pool
+    concurrency_limit:
+      limit: 1
+      collision_strategy: CANCEL_NEW
+    parameters:
+      stocks_file: config/syariah_stocks.txt
+      skip_intraday: false
+    schedules: []  # manual only
+
+  # Daily yfinance price update — writes to yf_stock_data (shadow), NOT the EODHD
+  # table, so the two sources can be compared bar for bar during the parallel run.
+  # Scheduled last in the evening chain (19:30 daily-update, 20:00 gap-check,
+  # 20:30 bulk-eod, 21:00 valuation) because a 651-symbol sweep runs ~40 minutes.
+  - name: yfinance-price-update
+    entrypoint: flows/yfinance_price_flow.py:update_flow
+    description: "Daily yfinance OHLCV into the shadow table (parallel-run phase)"
+    work_pool:
+      name: default-agent-pool
+    concurrency_limit:
+      limit: 1
+      collision_strategy: CANCEL_NEW
+    parameters:
+      stocks_file: config/syariah_stocks.txt
+      update_window: 7
+      skip_intraday: false
+    schedules:
+      - cron: "30 21 * * 1-5"   # Mon-Fri 21:30 WIB — after valuation-snapshot (21:00)
+        timezone: "Asia/Jakarta"
+        active: true
+
   # Bulk last-day EOD/dividends/splits for the WHOLE exchange (1 request = 100 calls each,
   # vs ~651 per-symbol). INACTIVE until the bulk endpoint + exchange code are verified
   # after quota reset (run scripts/test_bulk.py). Activate, then drop EOD/actions from
