@@ -6,6 +6,7 @@ psycopg2-binary>=2.9.0
 orjson>=3.9.0
 questdb>=1.1.0
 numpy>=1.24.0
+yfinance>=1.3.0
 
 # Prefect (self-hosted server + worker)
 prefect>=3.0.0
