@@ -195,6 +195,25 @@ deployments:
         timezone: "Asia/Jakarta"
         active: true
 
+  # Daily read-only census of eodhd_stock_data. This is the answer to "every time
+  # I ask for a check there is damage": there was never a routine check, so each
+  # one surfaced months of accumulated drift at once. Run daily, the report is a
+  # boring delta, and anything new in it is a real signal rather than an
+  # excavation. Writes nothing, so it is safe to run beside the collectors.
+  - name: data-audit
+    entrypoint: flows/data_audit_flow.py:data_audit_flow
+    description: "Daily read-only census: empty bars, unknown intervals, duplicate periods"
+    work_pool:
+      name: default-agent-pool
+    concurrency_limit:
+      limit: 1
+      collision_strategy: CANCEL_NEW
+    parameters: {}
+    schedules:
+      - cron: "0 22 * * *"   # 22:00 WIB — after the whole evening collection chain
+        timezone: "Asia/Jakarta"
+        active: true
+
   # yfinance price backfill — one-off seed of the shadow table with all history
   # Yahoo offers (decades of d/w/m, ~700 days of 1h). Manual only: it takes ~40
   # minutes and never needs repeating, since update runs keep it current.
