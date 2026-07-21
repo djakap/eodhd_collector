@@ -483,22 +483,29 @@ class QuestDBClient:
             # Safe fallback: treat all as stale
             return {'fresh': [], 'stale': list(symbols), 'unknown': []}
     
-    def insert_price_data(self, records):
+    def insert_price_data(self, records, table: Optional[str] = None):
         """
         Insert price data records using ILP (fastest) or SQL fallback
-        
+
         Args:
-            records: List of tuples (symbol, interval, timestamp, open, high, low, 
+            records: List of tuples (symbol, interval, timestamp, open, high, low,
                     close, adjusted_close, volume, gmtoffset, source, created_at)
                     OR List of dicts (backward compatible)
+            table: Target table, defaulting to the production price table. Used by
+                   the yfinance collector to write into a shadow table during the
+                   parallel run — both sources share a dedup key, so writing them to
+                   the same table would leave only the last writer's values and make
+                   any comparison impossible.
         """
         if not records:
             return
-        
+
+        table = table or TABLE_STOCK_DATA
+
         # Try ILP first (10-100x faster) if enabled
         if self.use_ilp and QuestDBClient._use_ilp:
             try:
-                self._insert_price_data_ilp(records)
+                self._insert_price_data_ilp(records, table)
                 return  # Success!
             except Exception as e:
                 error_msg = str(e)
@@ -512,9 +519,9 @@ class QuestDBClient:
                     logger.debug(f"ILP insert failed (transient), using SQL fallback: {e}")
         
         # Fallback to SQL insert (still fast with execute_batch)
-        self._insert_price_data_sql(records)
+        self._insert_price_data_sql(records, table)
     
-    def _insert_price_data_ilp(self, records):
+    def _insert_price_data_ilp(self, records, table=None):
         """Insert using QuestDB ILP protocol (10-100x faster than SQL)"""
         if not HAS_ILP:
             raise ImportError("questdb library not available")
@@ -572,7 +579,7 @@ class QuestDBClient:
                             # volume must be int (LONG in QuestDB), gmtoffset must be int (INT in QuestDB)
                             # Sending float for integer columns causes ILP cast error and row rejection
                             sender.row(
-                                TABLE_STOCK_DATA,
+                                table or TABLE_STOCK_DATA,
                                 symbols={
                                     'symbol': str(row['symbol']),
                                     'interval': str(row['interval']),
@@ -607,10 +614,11 @@ class QuestDBClient:
                         # Final attempt failed or non-connection error
                         raise Exception(f"ILP insert failed after {attempt + 1} attempts: {error_msg}")
     
-    def _insert_price_data_sql(self, records):
+    def _insert_price_data_sql(self, records, table=None):
         """Insert using SQL (slower but compatible fallback)"""
+        table = table or TABLE_STOCK_DATA
         sql = f"""
-        INSERT INTO {TABLE_STOCK_DATA} 
+        INSERT INTO {table} 
         (symbol, interval, timestamp, open, high, low, close, adjusted_close, 
          volume, gmtoffset, source, created_at)
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)

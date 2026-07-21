@@ -7,6 +7,34 @@
 -- a history that cannot be bought back later.
 
 -- ============================================================================
+-- 0. PRICE SHADOW TABLE (parallel-run only)
+-- ============================================================================
+-- Mirrors eodhd_stock_data exactly so the two sources can be compared bar for bar.
+--
+-- Why a separate table rather than writing both sources into eodhd_stock_data:
+-- that table dedups on (timestamp, symbol, interval), so the second writer simply
+-- overwrites the first. There would be nothing left to compare — the very thing
+-- the parallel run exists to measure.
+--
+-- After cutover this table is dropped and the collector is pointed at
+-- eodhd_stock_data by clearing YF_PRICE_TABLE.
+CREATE TABLE yf_stock_data (
+    symbol SYMBOL,
+    interval SYMBOL,            -- 'd', 'w', 'm', '1h', ...
+    timestamp TIMESTAMP,        -- bar time, UTC for intraday (designated)
+    open DOUBLE,
+    high DOUBLE,
+    low DOUBLE,
+    close DOUBLE,
+    adjusted_close DOUBLE,
+    volume LONG,
+    gmtoffset INT,              -- always NULL from yfinance
+    source SYMBOL,              -- 'eod' or 'intraday'
+    created_at TIMESTAMP
+) timestamp(timestamp) PARTITION BY MONTH WAL
+  DEDUP UPSERT KEYS(timestamp, symbol, interval);
+
+-- ============================================================================
 -- 1. FUNDAMENTALS (long/narrow)
 -- ============================================================================
 -- Narrow, not wide, because line items differ per issuer: a bank reports no

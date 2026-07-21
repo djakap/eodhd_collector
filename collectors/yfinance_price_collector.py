@@ -32,12 +32,14 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from api.yfinance_client import YFinanceClient, RateLimitedError, MAX_LOOKBACK_DAYS
 from db.questdb_client import QuestDBClient
+from config.db_config import TABLE_STOCK_DATA
 from config.yfinance_config import (
     YF_EOD_PERIODS,
     YF_INTRADAY_INTERVALS,
     YF_EOD_PERIOD_FULL,
     YF_INTRADAY_FULL_DAYS,
     YF_UPDATE_WINDOW_DAYS,
+    YF_PRICE_TABLE,
 )
 
 logger = logging.getLogger(__name__)
@@ -47,9 +49,11 @@ class YFinancePriceCollector:
     """Collects OHLCV and corporate actions from yfinance into QuestDB."""
 
     def __init__(self, update_mode: bool = False,
-                 update_window: int = YF_UPDATE_WINDOW_DAYS):
+                 update_window: int = YF_UPDATE_WINDOW_DAYS,
+                 target_table: str = YF_PRICE_TABLE):
         self.update_mode = update_mode
         self.update_window = update_window
+        self.target_table = target_table
         self.api = YFinanceClient()
         self.db = QuestDBClient()
         self.db.connect()
@@ -77,7 +81,7 @@ class YFinancePriceCollector:
         as Yahoo allows, which for 5m/15m/30m is only 60 days.
         """
         if self.update_mode:
-            last = self.db.get_max_timestamp(symbol, interval)
+            last = self._last_bar(symbol, interval)
             if last:
                 start = last - timedelta(days=self.update_window)
                 return start.strftime('%Y-%m-%d'), None, None
@@ -88,6 +92,25 @@ class YFinancePriceCollector:
         days = min(YF_INTRADAY_FULL_DAYS, MAX_LOOKBACK_DAYS.get(interval, 60))
         start = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
         return start, None, None
+
+    def _last_bar(self, symbol: str, interval: str) -> Optional[datetime]:
+        """
+        Latest bar already stored for this symbol/interval, read from the target
+        table itself rather than eodhd_stock_metadata — during the parallel run
+        that metadata tracks EODHD's progress, not ours.
+        """
+        try:
+            self.db.ensure_connection()
+            self.db.cursor.execute(
+                f'SELECT max(timestamp) FROM "{self.target_table}" '
+                f'WHERE symbol = %s AND interval = %s',
+                (symbol, interval)
+            )
+            row = self.db.cursor.fetchone()
+            return row[0] if row else None
+        except Exception as e:
+            logger.debug(f"No prior bar for {symbol}/{interval}: {e}")
+            return None
 
     def _store(self, symbol: str, interval: str, records: List[Dict]) -> int:
         if not records:
@@ -102,14 +125,18 @@ class YFinancePriceCollector:
             r['source'], now,
         ) for r in records]
 
-        self.db.insert_price_data(rows)
+        self.db.insert_price_data(rows, table=self.target_table)
 
-        stamps = [r['timestamp'] for r in records]
-        self.db.upsert_stock_metadata(
-            symbol, interval,
-            data_start=min(stamps), data_end=max(stamps),
-            total_records=len(rows),
-        )
+        # Metadata tracking is only meaningful once this collector owns the
+        # production table; while shadowing it would overwrite EODHD's freshness
+        # markers and confuse gap-check.
+        if self.target_table == TABLE_STOCK_DATA:
+            stamps = [r['timestamp'] for r in records]
+            self.db.upsert_stock_metadata(
+                symbol, interval,
+                data_start=min(stamps), data_end=max(stamps),
+                total_records=len(rows),
+            )
         return len(rows)
 
     # -- collection ---------------------------------------------------------
@@ -145,6 +172,11 @@ class YFinancePriceCollector:
         Always fetched in full — yfinance returns the entire history per call and
         offers no date filter. DEDUP on (action_date, symbol, action_type) makes
         the repetition free, which is exactly why that table was rebuilt first.
+
+        There is no shadow table for corporate actions, so writing while the price
+        collector is still shadowing would overwrite EODHD's dividend values —
+        which drift, since EODHD reports the adjusted amount. collect_all()
+        therefore skips this until the collector owns the production price table.
         """
         records = self.api.get_dividends(symbol) + self.api.get_splits(symbol)
         if not records:
@@ -152,8 +184,15 @@ class YFinancePriceCollector:
         self.db.insert_corporate_actions(records)
         return len(records)
 
+    @property
+    def is_shadowing(self) -> bool:
+        return self.target_table != TABLE_STOCK_DATA
+
     def collect_all(self, symbol: str, skip_intraday: bool = False,
-                    skip_actions: bool = False) -> Dict:
+                    skip_actions: Optional[bool] = None) -> Dict:
+        if skip_actions is None:
+            skip_actions = self.is_shadowing
+
         result = {'symbol': symbol, 'eod': 0, 'intraday': 0, 'actions': 0, 'error': None}
         try:
             result['eod'] = self.collect_eod(symbol)

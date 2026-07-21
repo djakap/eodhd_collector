@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Table names
+TABLE_YF_STOCK_DATA = 'yf_stock_data'
 TABLE_YF_FUNDAMENTALS = 'yf_fundamentals'
 TABLE_YF_VALUATION = 'yf_valuation_daily'
 TABLE_YF_ANALYST = 'yf_analyst_snapshot'
@@ -103,6 +104,11 @@ PROFILE_FIELDS = {
 # ---------------------------------------------------------------------------
 YF_EOD_PERIODS = ['d', 'w', 'm']
 YF_INTRADAY_INTERVALS = ['1h']
+
+# Where the price collector writes. During the parallel run this is the shadow
+# table, so EODHD's rows stay intact and the two can be compared; clearing it (or
+# setting it to 'eodhd_stock_data') switches the collector to production at cutover.
+YF_PRICE_TABLE = os.getenv('YF_PRICE_TABLE', TABLE_YF_STOCK_DATA)
 
 # How far back a full (non-incremental) collection reaches.
 YF_EOD_PERIOD_FULL = 'max'
