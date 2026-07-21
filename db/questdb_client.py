@@ -7,7 +7,7 @@ import psycopg2
 from psycopg2 import pool
 from psycopg2.extras import execute_batch
 from typing import List, Dict, Optional, Set, Tuple
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 import logging
 import time
 import threading
@@ -553,10 +553,20 @@ class QuestDBClient:
                     with Sender(Protocol.Tcp, self.ilp_host, self.ilp_port, auto_flush_rows=500) as sender:
                         for row in rows:
                             # Convert to TimestampNanos (QuestDB ILP requirement)
-                            if isinstance(row['timestamp'], datetime):
-                                ts_nanos = TimestampNanos(int(row['timestamp'].timestamp() * 1_000_000_000))
+                            # Naive timestamps in this table are UTC by contract
+                            # (intraday) or plain dates (EOD). datetime.timestamp()
+                            # resolves a naive value using the PROCESS timezone, so
+                            # the same row lands in a different place depending on
+                            # where the collector runs: correct from the UTC
+                            # container, 7 hours early from the WIB host. Pinning
+                            # UTC makes the write independent of that.
+                            ts = row['timestamp']
+                            if isinstance(ts, datetime):
+                                if ts.tzinfo is None:
+                                    ts = ts.replace(tzinfo=timezone.utc)
+                                ts_nanos = TimestampNanos(int(ts.timestamp() * 1_000_000_000))
                             else:
-                                ts_nanos = TimestampNanos(int(row['timestamp'] * 1_000_000_000))
+                                ts_nanos = TimestampNanos(int(ts * 1_000_000_000))
                             
                             # Build ILP row - all values must be correct types
                             # volume must be int (LONG in QuestDB), gmtoffset must be int (INT in QuestDB)

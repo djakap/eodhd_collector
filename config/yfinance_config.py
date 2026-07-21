@@ -90,6 +90,28 @@ PROFILE_FIELDS = {
     'website': 'website',
 }
 
+# ---------------------------------------------------------------------------
+# Price collection
+#
+# Interval codes are the EODHD ones already stored in eodhd_stock_data.interval;
+# api/yfinance_client.INTERVAL_MAP translates them for Yahoo.
+#
+# Intraday defaults to 1h only. Yahoo caps 5m/15m/30m at 60 days (measured), so
+# they can be kept current but never re-fetched further back — the existing 5m
+# archive from 2024-06 is not reproducible from this source. 4h is not collected:
+# utils/aggregate_4h derives it from 1h against the database.
+# ---------------------------------------------------------------------------
+YF_EOD_PERIODS = ['d', 'w', 'm']
+YF_INTRADAY_INTERVALS = ['1h']
+
+# How far back a full (non-incremental) collection reaches.
+YF_EOD_PERIOD_FULL = 'max'
+YF_INTRADAY_FULL_DAYS = 700       # under Yahoo's 730-day cap for 1h
+
+# Incremental runs re-fetch this many days before the last stored bar, so late
+# corrections and adjustments are picked up. DEDUP makes the overlap free.
+YF_UPDATE_WINDOW_DAYS = 7
+
 # Statements pulled per symbol: (yfinance attribute, statement, freq)
 STATEMENTS = [
     ('income_stmt', 'income', 'annual'),

@@ -44,6 +44,31 @@ class RateLimitedError(RuntimeError):
     """Raised when a symbol could not be fetched because Yahoo is rate-limiting."""
 
 
+# Our interval codes -> Yahoo's. The rest of the codebase speaks the EODHD codes
+# already stored in eodhd_stock_data.interval, so the mapping lives here only.
+INTERVAL_MAP = {
+    'd': '1d',
+    'w': '1wk',
+    'm': '1mo',
+    '1h': '1h',
+    '5m': '5m',
+    '15m': '15m',
+    '30m': '30m',
+}
+
+# Bars whose timestamp carries a time of day, and therefore needs UTC conversion.
+INTRADAY_CODES = frozenset({'1h', '5m', '15m', '30m'})
+
+# Yahoo's own history limits, measured 2026-07-20 against .JK symbols. Requesting
+# beyond these returns an empty frame rather than an error.
+MAX_LOOKBACK_DAYS = {
+    '5m': 60,
+    '15m': 60,
+    '30m': 60,
+    '1h': 730,
+}
+
+
 # Matching is word-boundary, never substring: 'Operations' contains "ratio" and
 # 'Administration' contains "ratio", so a naive `'ratio' in name` misclassifies
 # 'Net Income Continuous Operations' as a ratio and silently drops it out of any
@@ -255,6 +280,105 @@ class YFinanceClient:
 
         return rows
 
+    # -- price / corporate actions ------------------------------------------
+
+    def get_price_history(self, symbol: str, interval: str,
+                          start=None, end=None, period: Optional[str] = None) -> List[Dict]:
+        """
+        Fetch OHLCV bars for one interval, normalised to the storage convention.
+
+        `interval` is OUR code ('d', 'w', 'm', '1h', '5m', ...), not Yahoo's — the
+        caller should never have to know the mapping.
+
+        auto_adjust=False so Close stays the raw close and Adj Close is available
+        separately, matching how EODHD populates close vs adjusted_close. With
+        auto_adjust=True (the yfinance default) Close is silently the adjusted
+        series and would not line up with the existing rows.
+        """
+        yf_interval = INTERVAL_MAP.get(interval)
+        if yf_interval is None:
+            raise ValueError(f"Unsupported interval: {interval}")
+
+        kwargs = dict(interval=yf_interval, auto_adjust=False)
+        if period:
+            kwargs['period'] = period
+        else:
+            if start:
+                kwargs['start'] = start
+            if end:
+                kwargs['end'] = end
+
+        df = self._fetch(f"{symbol}.history({interval})",
+                         lambda: yf.Ticker(symbol).history(**kwargs))
+        if df is None or not isinstance(df, pd.DataFrame) or df.empty:
+            return []
+
+        intraday = interval in INTRADAY_CODES
+        records: List[Dict] = []
+        for ts, row in df.iterrows():
+            close = _num(row.get('Close'))
+            if close is None:
+                continue
+            open_ = _num(row.get('Open'))
+            high = _num(row.get('High'))
+            low = _num(row.get('Low'))
+            if None in (open_, high, low):
+                continue
+            volume = _num(row.get('Volume'))
+            records.append({
+                'symbol': symbol,
+                'interval': interval,
+                'timestamp': _to_storage_timestamp(ts, intraday),
+                'open': open_,
+                'high': high,
+                'low': low,
+                'close': close,
+                'adjusted_close': _num(row.get('Adj Close')) if not intraday else None,
+                'volume': int(volume) if volume is not None else None,
+                'source': 'intraday' if intraday else 'eod',
+            })
+        return records
+
+    def get_dividends(self, symbol: str) -> List[Dict]:
+        """Full dividend history, shaped for insert_corporate_actions()."""
+        series = self._fetch(f"{symbol}.dividends", lambda: yf.Ticker(symbol).dividends)
+        if series is None or not len(series):
+            return []
+        return [{
+            'symbol': symbol,
+            'action_type': 'dividend',
+            'action_date': _to_storage_timestamp(ts, intraday=False),
+            'dividend_amount': _num(value),
+            'dividend_currency': 'IDR' if symbol.endswith('.JK') else None,
+        } for ts, value in series.items()]
+
+    def get_splits(self, symbol: str) -> List[Dict]:
+        """
+        Full split history, shaped for insert_corporate_actions().
+
+        yfinance reports the ratio as a single float (5.0 for a 5-for-1), whereas
+        the table stores from/to plus the original string. A value of 0 means "no
+        split" and is dropped.
+        """
+        series = self._fetch(f"{symbol}.splits", lambda: yf.Ticker(symbol).splits)
+        if series is None or not len(series):
+            return []
+
+        records = []
+        for ts, value in series.items():
+            ratio = _num(value)
+            if not ratio:
+                continue
+            records.append({
+                'symbol': symbol,
+                'action_type': 'split',
+                'action_date': _to_storage_timestamp(ts, intraday=False),
+                'split_ratio': f"{ratio:g}/1",
+                'split_from': int(ratio) if float(ratio).is_integer() else None,
+                'split_to': 1,
+            })
+        return records
+
     def get_profile(self, symbol: str) -> Optional[Dict]:
         """Fetch descriptive company data (sector, industry, ISIN, ...)."""
         info = self._fetch(f"{symbol}.info", lambda: yf.Ticker(symbol).info)
@@ -276,6 +400,32 @@ class YFinanceClient:
             record['full_time_employees'] = None
 
         return record
+
+
+def _to_storage_timestamp(ts, intraday: bool):
+    """
+    Convert a yfinance bar index to the convention already in eodhd_stock_data.
+
+    This is the single most dangerous conversion in the migration. yfinance returns
+    tz-AWARE timestamps in the exchange timezone (WIB for .JK), while the table holds
+    27.7M rows written by the EODHD collector as tz-NAIVE values:
+
+      intraday  ->  naive UTC   (IDX 09:00 WIB is stored as 02:00)
+      EOD/w/m   ->  naive date at midnight
+
+    Dropping the tz without converting would place every intraday bar 7 hours off,
+    silently, and it would still look plausible. Verified against BRIS.JK 2026-07-15,
+    where EODHD's first 1h bar is stored at 02:00.
+    """
+    ts = pd.Timestamp(ts)
+    if intraday:
+        if ts.tz is not None:
+            ts = ts.tz_convert('UTC').tz_localize(None)
+        return ts.to_pydatetime()
+    # Daily and coarser: the calendar date is what matters, not the session time.
+    if ts.tz is not None:
+        ts = ts.tz_localize(None)
+    return ts.normalize().to_pydatetime()
 
 
 def _num(value) -> Optional[float]:
