@@ -41,6 +41,19 @@ from typing import Optional
 # utils/aggregate_4h; the rest come from EODHD.
 VALID_INTERVALS = frozenset({'5m', '15m', '30m', '1h', '4h', 'd', 'w', 'm'})
 
+# EODHD writes 999999.9999 where it has no price. 72,092 rows hold it as if it
+# were a quote — 53,928 daily, 14,275 weekly, 3,889 monthly, all pre-2010 (SMGR,
+# TSPC, INCO, TLKM and others back to 1994). It is EODHD's own placeholder, not a
+# collector defect, and the API still returns it today for some symbols while
+# returning real prices for others (TLKM 1995-12-01 now comes back as 1090.656).
+#
+# It is flagged rather than dropped because a row carrying it is not empty — the
+# other fields may be genuine — but it must never be treated as a price: any
+# return or dollar-bar computation over ASII in 1994 would see a million-rupiah
+# quote. The audit counts it; conversion to NULL is a separate, reviewed step.
+SENTINEL_PRICE = 999999.9999
+SENTINEL_MIN = 999999.0
+
 # Tuple layout used by QuestDBClient.insert_price_data.
 IDX_INTERVAL, IDX_TIMESTAMP = 1, 2
 IDX_OPEN, IDX_HIGH, IDX_LOW, IDX_CLOSE = 3, 4, 5, 6
@@ -74,6 +87,12 @@ def is_empty_bar(open_, high, low, close) -> bool:
     return open_ is None and high is None and low is None and close is None
 
 
+def has_sentinel_price(open_, high, low, close) -> bool:
+    """True when any OHLC field carries EODHD's no-price placeholder."""
+    return any(v is not None and float(v) >= SENTINEL_MIN
+               for v in (open_, high, low, close))
+
+
 def describe_rejection(record) -> Optional[str]:
     """
     Why this record should not be written, or None if it is fine.
@@ -99,4 +118,8 @@ def describe_rejection(record) -> Optional[str]:
         return 'timestamp harus naive UTC, bukan tz-aware'
     if is_empty_bar(o, h, l, c):
         return 'bar kosong (OHLC seluruhnya NULL)'
+    if has_sentinel_price(o, h, l, c):
+        # Reported, not dropped: the row may carry a genuine volume and date, and
+        # deciding what a missing price becomes is a data question, not a gate's.
+        return f'harga sentinel {SENTINEL_PRICE} (EODHD: harga tidak tersedia)'
     return None

@@ -37,6 +37,8 @@ from config.db_config import (
     QUESTDB_PASSWORD, QUESTDB_DATABASE,
 )
 
+from utils.bar_rules import SENTINEL_MIN
+
 OHLC_NULL = "open IS NULL AND high IS NULL AND low IS NULL AND close IS NULL"
 
 # Intervals we expect to exist. Anything outside this is itself a finding —
@@ -119,6 +121,27 @@ class Audit:
         print(f"  yang mengandung NULL' akan membunuh semuanya.")
 
     # ------------------------------------------------------------------
+    def sentinel_prices(self, ivs):
+        hr("2b. HARGA SENTINEL 999999.9999 (EODHD: harga tidak tersedia)")
+        print("  Tersimpan SEBAGAI HARGA, jadi perhitungan return atau dollar bar")
+        print("  akan melihat kuotasi sejuta rupiah. Placeholder EODHD sendiri —")
+        print("  API masih mengembalikannya untuk sebagian simbol (SMGR/TSPC/INCO)")
+        print("  tapi kini memberi harga asli untuk yang lain (TLKM 1995-12-01).\n")
+        grand = 0
+        for iv in ivs:
+            n = self.one(f'SELECT count() FROM "{self.table}" WHERE interval = %s '
+                         f'AND (open >= {SENTINEL_MIN} OR high >= {SENTINEL_MIN} '
+                         f'OR low >= {SENTINEL_MIN} OR close >= {SENTINEL_MIN})', (iv,))
+            if n:
+                lo = self.one(f'SELECT min(timestamp) FROM "{self.table}" '
+                              f'WHERE interval = %s AND close >= {SENTINEL_MIN}', (iv,))
+                hi = self.one(f'SELECT max(timestamp) FROM "{self.table}" '
+                              f'WHERE interval = %s AND close >= {SENTINEL_MIN}', (iv,))
+                print(f"  {iv:8s} {n:>8,}  {str(lo)[:10]} .. {str(hi)[:10]}")
+                self.note('harga sentinel', n, f'interval={iv}')
+                grand += n
+        print(f"  {'TOTAL':8s} {grand:>8,}")
+
     def hour_profile(self, ivs):
         hr("3. PROFIL JAM (UTC) — mendeteksi stempel waktu tergeser")
         print("  Sesi IDX 09:00-16:00 WIB = 02:00-09:00 UTC.\n")
@@ -265,6 +288,7 @@ class Audit:
         print(f"AUDIT BACA-SAJA — {self.table} — {datetime.now():%Y-%m-%d %H:%M}")
         ivs = self.intervals()
         self.null_rows(ivs)
+        self.sentinel_prices(ivs)
         self.hour_profile(ivs)
         self.shift_probe()
         self.period_alignment()

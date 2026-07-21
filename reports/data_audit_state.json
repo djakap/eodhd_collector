@@ -1,0 +1,21 @@
+{
+  "generated": "2026-07-21T22:25:11",
+  "counts": {
+    "interval tidak dikenal | interval='4h_null'": 17321,
+    "baris kosong | interval=5m, volume>0: 0": 2679790,
+    "baris kosong | interval=15m, volume>0: 0": 695423,
+    "baris kosong | interval=30m, volume>0: 0": 338379,
+    "baris kosong | interval=1h, volume>0: 0": 145525,
+    "baris kosong | interval=4h_null, volume>0: 0": 17321,
+    "jam di luar sesi | interval=5m, jam=[0, 1, 19, 20, 21, 23]": 12672,
+    "jam di luar sesi | interval=15m, jam=[0, 1, 10, 19, 20, 21, 23]": 126614,
+    "jam di luar sesi | interval=30m, jam=[0, 1, 10, 11, 19, 20, 21, 23]": 250149,
+    "jam di luar sesi | interval=d, jam=[17]": 295,
+    "jam di luar sesi | interval=1h, jam=[0, 1, 19, 20, 21, 23]": 1459,
+    "jam di luar sesi | interval=w, jam=[17]": 96,
+    "jam di luar sesi | interval=m, jam=[17]": 57,
+    "bar m berlebih | lebih dari satu per (simbol,bulan)": 40012,
+    "bar w berlebih | lebih dari satu per (simbol,minggu)": 1956,
+    "tabel tanpa DEDUP | baris berlebih di eodhd_stock_metadata": 3858
+  }
+}
