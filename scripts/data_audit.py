@@ -171,16 +171,28 @@ class Audit:
 
     # ------------------------------------------------------------------
     def period_alignment(self):
-        hr("5. BAR w/m — apakah bertanggal awal periode?")
-        for iv, trunc, label in [('m', 'month', 'awal bulan'), ('w', 'week', 'Senin')]:
+        hr("5. BAR w/m — berapa banyak per (simbol, periode)?")
+        print("  CATATAN: 'bukan tanggal 1' BUKAN anomali. Diverifikasi terhadap API")
+        print("  EODHD 2026-07-21: bar bulanan distempel pada hari bursa pertama, dan")
+        print("  nilai tersimpan cocok persis dengan API (BRIS/UNTR 2025-01..04,")
+        print("  termasuk tanggal ganjil 2025-04-08). Versi sebelumnya memeriksa")
+        print("  date_trunc() dan menandai 84,672 baris sah sebagai rusak.\n")
+        print("  Uji yang benar adalah kelebihan jumlah: EODHD mengembalikan SATU bar")
+        print("  per periode, jadi periode dengan lebih dari satu baris memuat sisa")
+        print("  pengambilan inkremental. Otoritasnya tetap API — lihat")
+        print("  scripts/reconcile_periods.py untuk pencocokan baris-per-baris.\n")
+        for iv, label in [('m', 'bulan'), ('w', 'minggu')]:
             tot = self.one(f'SELECT count() FROM "{self.table}" WHERE interval = %s', (iv,))
-            bad = self.one(f'SELECT count() FROM "{self.table}" WHERE interval = %s '
-                           f"AND timestamp <> date_trunc('{trunc}', timestamp)", (iv,))
-            print(f"  {iv}: {tot:,} baris, {bad:,} bukan {label} ({bad/tot*100:.1f}%)")
-            self.note(f'bar {iv} salah tanggal', bad, f'bukan {label}')
+            uniq = self.one(f'SELECT count() FROM (SELECT symbol, '
+                            f"date_trunc('{'month' if iv == 'm' else 'week'}', timestamp) p "
+                            f'FROM "{self.table}" WHERE interval = %s '
+                            f'GROUP BY symbol, p)', (iv,))
+            extra = tot - uniq
+            print(f"  {iv}: {tot:,} baris untuk {uniq:,} (simbol,{label}) "
+                  f"= {tot/uniq:.2f}x  -> {extra:,} baris berlebih")
+            self.note(f'bar {iv} berlebih', extra, f'lebih dari satu per (simbol,{label})')
 
-        print("\n  Apakah baris salah-tanggal itu duplikat yang bisa dipindah, atau")
-        print("  jendela bergulir yang isinya berbeda? Bukti dari satu simbol:\n")
+        print("\n  Contoh satu simbol — mana yang dikenali API, lihat reconcile_periods.py:\n")
         rows = self.all(
             f'SELECT timestamp, open, high, low, close FROM "{self.table}" '
             f"WHERE symbol = 'BRIS.JK' AND interval = 'm' "
