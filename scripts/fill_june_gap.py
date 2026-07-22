@@ -158,11 +158,20 @@ def main():
             db.insert_price_data(to_write[i:i + 5000])
     finally:
         db.close()
+    # Reconnect before the final count. The original connection has been idle
+    # through ~15 minutes of API calls by this point and QuestDB drops it, which
+    # made the first run raise "server closed the connection unexpectedly" AFTER
+    # the writes had already succeeded — an alarming traceback for a run that
+    # actually worked.
     time.sleep(6)
-
-    cur.execute(f"""SELECT count() FROM "{TABLE_STOCK_DATA}" WHERE interval='d'
-                    AND timestamp >= %s AND timestamp < %s""", (START, END))
-    print(f"\nProduksi sekarang punya {cur.fetchone()[0]:,} baris di rentang itu.")
+    conn2 = psycopg2.connect(host=QUESTDB_HOST, port=QUESTDB_PG_PORT,
+                             user=QUESTDB_USER, password=QUESTDB_PASSWORD,
+                             database=QUESTDB_DATABASE)
+    c2 = conn2.cursor()
+    c2.execute(f"""SELECT count() FROM "{TABLE_STOCK_DATA}" WHERE interval='d'
+                   AND timestamp >= %s AND timestamp < %s""", (START, END))
+    print(f"\nProduksi sekarang punya {c2.fetchone()[0]:,} baris di rentang itu.")
+    conn2.close()
 
 
 if __name__ == "__main__":
