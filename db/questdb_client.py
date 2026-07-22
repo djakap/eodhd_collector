@@ -34,6 +34,34 @@ from config.db_config import (
 )
 from utils.bar_rules import describe_rejection
 
+
+def _as_utc(value):
+    """
+    Normalise a created_at value to a TZ-AWARE UTC datetime.
+
+    Every caller fills this with datetime.now(), which returns the HOST's local
+    time — WIB here, UTC inside the container. Sent as-is, the same run would
+    stamp provenance seven hours apart depending on where it executed, which is
+    the exact bug just removed from the market timestamp. A naive value is
+    therefore read as host-local and converted; a tz-aware one is trusted.
+
+    The result stays tz-aware on purpose. Handing the ILP client a naive datetime
+    makes it apply its OWN local-to-UTC conversion, so a value already converted
+    here lands seven hours early — measured: 03:00 UTC became 20:00 the previous
+    day. Keeping the offset attached leaves the client nothing to guess.
+
+    None becomes the current instant rather than staying NULL: a row always has a
+    moment when it was written, and leaving the column empty is what made
+    13,167,158 rows untraceable.
+    """
+    if value is None:
+        return datetime.now(timezone.utc)
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            value = value.astimezone(timezone.utc)
+        return value.astimezone(timezone.utc)
+    return value
+
 logger = logging.getLogger(__name__)
 
 # Corporate actions predate nothing on IDX before the mid-90s (oldest real action
@@ -634,6 +662,18 @@ class QuestDBClient:
                                     'adjusted_close': float(row['adjusted_close']) if row.get('adjusted_close') is not None else None,
                                     'volume': int(row['volume']) if row.get('volume') is not None else None,
                                     'gmtoffset': int(row['gmtoffset']) if row.get('gmtoffset') is not None else None,
+                                    # When the row was WRITTEN, as opposed to when the bar
+                                    # happened. It was read out of the record above but
+                                    # never sent, so every row that came through ILP — the
+                                    # default, and 10-100x faster than the SQL fallback —
+                                    # left it NULL: 13,167,158 rows, 62.1% of the table.
+                                    #
+                                    # That blindness is why tracing damage in this table
+                                    # took guesswork. Where it WAS populated it worked:
+                                    # bad monthly bars clustered in created_at 2026-02 and
+                                    # 2026-06, which named aggregate_4h and backfill_gap as
+                                    # the sources. For the other 92% there was no postmark.
+                                    'created_at': _as_utc(row.get('created_at')),
                                 },
                                 at=ts_nanos
                             )
@@ -682,11 +722,16 @@ class QuestDBClient:
                     record['volume'],
                     record.get('gmtoffset'),
                     record['source'],
-                    datetime.now()
+                    _as_utc(record.get('created_at')).replace(tzinfo=None)
                 ))
         else:
-            # Already tuples - use directly
-            values = records
+            # Already tuples - use directly, but created_at still has to be pinned
+            # to UTC. Callers fill it with datetime.now(), which is the host clock;
+            # leaving it alone would make this path store WIB while the ILP path
+            # stores UTC, so the column's meaning would depend on which path ran.
+            values = [tuple(r[:11]) + (_as_utc(r[11] if len(r) > 11 else None)
+                                       .replace(tzinfo=None),)
+                      for r in records]
         
         try:
             # Ensure connection is alive before batch insert
