@@ -54,6 +54,30 @@ def connect():
     )
 
 
+def period_of(interval, d: datetime):
+    """The period a bar covers, independent of the day it is labelled with."""
+    if interval == 'm':
+        return (d.year, d.month)
+    iso = d.isocalendar()
+    return (iso[0], iso[1])
+
+
+def filled_periods(cur, interval):
+    """
+    Periods that already hold a bar, keyed by (symbol, period).
+
+    Asking "is this DATE present?" is not enough, and getting it wrong cost 651
+    duplicate June bars on the first run of this script. EODHD restamps a monthly
+    bar once the month is final: ITMA's June 2026 bar sat at 2026-06-24 and the
+    API now returns it as 2026-06-01, with the same close of 1325. Same bar, two
+    labels. A date-based check sees the second as missing and adds it beside the
+    first.
+    """
+    cur.execute(f"""SELECT symbol, timestamp FROM "{TABLE_STOCK_DATA}"
+                    WHERE interval = %s""", (interval,))
+    return {(s, period_of(interval, t)) for s, t in cur.fetchall()}
+
+
 def daily_range(cur, symbol, start, days):
     """High/low of the daily bars covering this period — the referee."""
     end = start + timedelta(days=days)
@@ -87,6 +111,10 @@ def main():
     conn.autocommit = True
     cur = conn.cursor()
 
+    occupied = {iv: filled_periods(cur, iv) for iv in ('w', 'm')}
+    print("Periode yang sudah terisi (apa pun tanggalnya): " +
+          ", ".join(f"{k}={len(v):,}" for k, v in occupied.items()) + "\n")
+
     tally = Counter()
     to_write = []
     for i, ((sym, iv), dates) in enumerate(sorted(missing.items()), 1):
@@ -113,6 +141,9 @@ def main():
                 continue
 
             start = datetime.strptime(d, '%Y-%m-%d')
+            if (sym, period_of(iv, start)) in occupied[iv]:
+                tally['periode sudah terisi (tanggal beda)'] += 1
+                continue
             rng = daily_range(cur, sym, start, 31 if iv == 'm' else 7)
             if rng is None:
                 tally['tanpa data harian pembanding'] += 1
