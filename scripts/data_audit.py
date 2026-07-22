@@ -152,6 +152,51 @@ class Audit:
                 grand += n
         print(f"  {'TOTAL':8s} {grand:>8,}")
 
+    def inflated_history(self):
+        hr("2c. HARGA LAMA MENGGELEMBUNG")
+        print("  Sebagian sejarah EODHD menyimpan harga yang jauh di atas kisaran")
+        print("  saham itu sendiri — ANTM tercatat 996,548 di 2003 padahal kini ~1,000.")
+        print("  Polanya: tiap simbol punya tanggal peralihan tajam, dan tidak ada satu")
+        print("  pun baris seperti ini setelah 2010. Diukur terhadap harga simbol itu")
+        print("  sendiri, bukan ambang tetap — DSSA 290,000 dan DCII 359,900 itu sah.\n")
+
+        # Only symbols that hold a large old price can qualify, and there are few,
+        # so the expensive per-symbol comparison runs on a short list.
+        cands = self.all(
+            f'SELECT symbol FROM (SELECT symbol, count() n FROM "{self.table}" '
+            f"WHERE interval='d' AND close > 50000 AND close < {SENTINEL_MIN} "
+            f"AND timestamp < '2010-01-01' GROUP BY symbol) WHERE n > 0")
+
+        total, hits = 0, []
+        for (sym,) in cands:
+            rows = self.all(
+                f'SELECT close FROM "{self.table}" WHERE symbol = %s AND interval=\'d\' '
+                f"AND timestamp >= '2012-01-01' AND timestamp < '2016-01-01' "
+                f"AND close IS NOT NULL", (sym,))
+            if len(rows) < 100:
+                continue
+            vals = sorted(float(r[0]) for r in rows)
+            ref = vals[len(vals) // 2]
+            limit = ref * 20
+            n = self.one(f'SELECT count() FROM "{self.table}" WHERE symbol = %s '
+                         f"AND interval='d' AND close > {limit} "
+                         f"AND close < {SENTINEL_MIN}", (sym,))
+            if n:
+                last = self.one(f'SELECT max(timestamp) FROM "{self.table}" '
+                                f"WHERE symbol = %s AND interval='d' AND close > {limit} "
+                                f"AND close < {SENTINEL_MIN}", (sym,))
+                hits.append((sym, n, ref, str(last)[:10]))
+                total += n
+
+        if not hits:
+            print("  tidak ada")
+            return
+        print(f"  {'simbol':10s} {'baris':>7s} {'acuan modern':>14s}  terakhir")
+        for sym, n, ref, last in sorted(hits, key=lambda x: -x[1]):
+            print(f"  {sym:10s} {n:>7,} {ref:>14,.0f}  {last}")
+        print(f"  {'TOTAL':10s} {total:>7,}")
+        self.note('harga lama menggelembung', total, f'{len(hits)} simbol, semua sebelum 2010')
+
     def hour_profile(self, ivs):
         hr("3. PROFIL JAM (UTC) — mendeteksi stempel waktu tergeser")
         print("  Sesi IDX 09:00-16:00 WIB = 02:00-09:00 UTC.\n")
@@ -299,6 +344,7 @@ class Audit:
         ivs = self.intervals()
         self.null_rows(ivs)
         self.sentinel_prices(ivs)
+        self.inflated_history()
         self.hour_profile(ivs)
         self.shift_probe()
         self.period_alignment()
