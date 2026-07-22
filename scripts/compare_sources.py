@@ -114,6 +114,28 @@ def _partial_cutoff(interval: str):
     return today          # d, 1h and friends: everything before today
 
 
+def _period_key(interval: str, ts):
+    """
+    The identity of a bar, for matching across sources.
+
+    For intraday and daily the timestamp IS the identity. For weekly and monthly
+    it is not, because the two sources anchor the period differently: EODHD stamps
+    a monthly bar on the first TRADING day and yfinance on the first CALENDAR day,
+    so AADI's December 2024 bar is 2024-12-05 in one and 2024-12-01 in the other.
+    Matching on the raw timestamp made every single monthly bar appear as both
+    "only EODHD" and "only yfinance" — 100% false mismatch. Weekly has the same
+    problem whenever a Monday is a holiday.
+
+    So w/m are keyed by the period they cover, not the day they are labelled with.
+    """
+    if interval == 'm':
+        return (ts.year, ts.month)
+    if interval == 'w':
+        iso = ts.isocalendar()
+        return (iso[0], iso[1])
+    return ts
+
+
 def fetch(cur, table: str, interval: str, since: str, symbols,
           include_all: bool, cutoff):
     sql = (f"SELECT symbol, timestamp, open, high, low, close, volume "
@@ -129,7 +151,7 @@ def fetch(cur, table: str, interval: str, since: str, symbols,
     sql += _session_filter(interval, include_all)
 
     cur.execute(sql, params)
-    return {(r[0], r[1]): r for r in cur.fetchall()}
+    return {(r[0], _period_key(interval, r[1])): r for r in cur.fetchall()}
 
 
 def _is_empty(row) -> bool:
