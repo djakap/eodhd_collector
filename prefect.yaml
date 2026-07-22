@@ -210,7 +210,10 @@ deployments:
       collision_strategy: CANCEL_NEW
     parameters: {}
     schedules:
-      - cron: "0 22 * * *"   # 22:00 WIB — after the whole evening collection chain
+      # 20:20 WIB — twenty minutes after gap-check starts, so the census is not
+      # reading a table mid-write. Overlapping them produced no benefit and risked
+      # a spurious delta, which is the one thing this job must not manufacture.
+      - cron: "20 20 * * *"
         timezone: "Asia/Jakarta"
         active: true
 

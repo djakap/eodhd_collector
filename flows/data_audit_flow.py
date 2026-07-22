@@ -19,17 +19,44 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import io
-import json
 from contextlib import redirect_stdout
 from datetime import datetime
-from pathlib import Path
 from typing import Dict
 
+import psycopg2
 from prefect import flow, task, get_run_logger
 
+from config.db_config import (
+    QUESTDB_HOST, QUESTDB_PG_PORT, QUESTDB_USER,
+    QUESTDB_PASSWORD, QUESTDB_DATABASE,
+)
 from scripts.data_audit import Audit
 
-STATE_PATH = Path("reports/data_audit_state.json")
+# History lives in QuestDB, not a file. The worker has no volume for /app/reports,
+# so a JSON state file is wiped by every `docker compose build prefect-worker` —
+# three rebuilds in one afternoon during this work, each silently resetting the
+# baseline so the day-over-day comparison never actually ran. The table is also
+# durable, gets swept up by the existing backup, and keeps the whole series rather
+# than only yesterday, which makes a slow drift visible instead of just a jump.
+HISTORY_TABLE = 'data_audit_history'
+
+
+def _connect():
+    return psycopg2.connect(
+        host=QUESTDB_HOST, port=QUESTDB_PG_PORT, user=QUESTDB_USER,
+        password=QUESTDB_PASSWORD, database=QUESTDB_DATABASE,
+    )
+
+
+def _ensure_history(cur):
+    cur.execute(f"""
+        CREATE TABLE IF NOT EXISTS {HISTORY_TABLE} (
+            run_ts TIMESTAMP,
+            anomaly_class SYMBOL CAPACITY 64 CACHE,
+            detail SYMBOL CAPACITY 256 CACHE,
+            row_count LONG
+        ) TIMESTAMP(run_ts) PARTITION BY MONTH WAL
+    """)
 
 
 @task(name="Run data audit", retries=1, retry_delay_seconds=120)
@@ -57,12 +84,23 @@ def compare(result: Dict) -> Dict:
     log = get_run_logger()
     counts = result['counts']
 
+    conn = _connect()
+    conn.autocommit = True
+    cur = conn.cursor()
+    _ensure_history(cur)
+
     previous = {}
-    if STATE_PATH.exists():
-        try:
-            previous = json.loads(STATE_PATH.read_text()).get('counts', {})
-        except (ValueError, OSError):
-            log.warning("state sebelumnya tidak terbaca — dianggap run pertama")
+    try:
+        cur.execute(f"SELECT max(run_ts) FROM {HISTORY_TABLE}")
+        last = cur.fetchone()[0]
+        if last:
+            cur.execute(
+                f"SELECT anomaly_class, detail, row_count FROM {HISTORY_TABLE} "
+                f"WHERE run_ts = %s", (last,))
+            previous = {f"{c} | {d}": n for c, d, n in cur.fetchall()}
+            log.info(f"Membandingkan terhadap run {last}")
+    except Exception as e:
+        log.warning(f"riwayat sebelumnya tidak terbaca ({e}) — dianggap run pertama")
 
     grown, appeared = [], []
     for key, n in counts.items():
@@ -87,11 +125,14 @@ def compare(result: Dict) -> Dict:
         for key, before, n in grown:
             log.error(f"BERTAMBAH: {key}  {before:,} -> {n:,}  (+{n - before:,})")
 
-    STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    STATE_PATH.write_text(json.dumps({
-        'generated': datetime.now().isoformat(timespec='seconds'),
-        'counts': counts,
-    }, indent=2))
+    run_ts = datetime.now()
+    for key, n in counts.items():
+        cls, _, detail = key.partition(' | ')
+        cur.execute(
+            f"INSERT INTO {HISTORY_TABLE} (run_ts, anomaly_class, detail, row_count) "
+            f"VALUES (%s, %s, %s, %s)", (run_ts, cls, detail, n))
+    conn.close()
+    log.info(f"{len(counts)} kelas dicatat ke {HISTORY_TABLE} @ {run_ts:%Y-%m-%d %H:%M}")
 
     return {'grown': grown, 'appeared': appeared, 'total': result['total']}
 
