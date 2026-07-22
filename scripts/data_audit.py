@@ -293,18 +293,50 @@ class Audit:
 
     # ------------------------------------------------------------------
     def dedup_health(self):
-        hr("6. TABEL TANPA DEDUP — berapa baris per kunci bisnis?")
+        hr("6. DUPLIKASI NYATA DI TABEL METADATA")
+        print("  Versi sebelumnya menghitung 'baris berlebih' sebagai total dikurangi")
+        print("  kunci unik, lalu melaporkannya sebagai cacat. Itu salah, dan alarmnya")
+        print("  palsu: eodhd_stock_metadata memang menyimpan SATU baris per")
+        print("  (simbol, interval) PER HARI koleksi — riwayat kesegaran, bukan tabel")
+        print("  kunci-nilai. Metrik itu naik tiap hari selamanya tanpa ada yang rusak.\n")
+        print("  Uji yang benar: adakah LEBIH DARI SATU baris untuk kunci yang sama")
+        print("  pada hari yang sama? Itu barulah penulis yang gagal memperbarui.\n")
+
         rows = self.all("SELECT table_name, designatedTimestamp, dedup FROM tables()")
-        for name, ts_col, dedup in sorted(rows):
-            if dedup:
-                continue
-            print(f"  {name:28s} designated ts = {ts_col}  (waktu-insert -> DEDUP mustahil)")
+        no_dedup = [(n, t) for n, t, d in sorted(rows) if not d]
+        if no_dedup:
+            print("  Tabel tanpa DEDUP (bukan cacat dengan sendirinya):")
+            for name, ts_col in no_dedup:
+                print(f"    {name:28s} designated ts = {ts_col}")
+
+        # eodhd_stock_metadata: one row per (symbol, interval) per day is correct
         tot = self.one('SELECT count() FROM eodhd_stock_metadata')
-        uniq = self.one('SELECT count() FROM (SELECT symbol, interval FROM '
-                        'eodhd_stock_metadata GROUP BY symbol, interval)')
-        if tot and uniq:
-            print(f"\n  eodhd_stock_metadata: {tot:,} baris / {uniq:,} kunci = {tot/uniq:.2f}x")
-            self.note('tabel tanpa DEDUP', tot - uniq, 'baris berlebih di eodhd_stock_metadata')
+        per_day = self.one(
+            'SELECT count() FROM (SELECT symbol, interval, '
+            "date_trunc('day', last_updated) d FROM eodhd_stock_metadata "
+            'GROUP BY symbol, interval, d)')
+        dupes = (tot - per_day) if tot and per_day else 0
+        print(f"\n  eodhd_stock_metadata: {tot:,} baris, {per_day:,} "
+              f"(simbol,interval,hari) unik -> {dupes:,} duplikat sejati")
+        if dupes:
+            self.note('duplikat metadata', dupes, 'lebih dari satu baris per kunci per hari')
+
+        # eodhd_metadata: keyed by symbol alone, so any repeat is a duplicate
+        tot2 = self.one('SELECT count() FROM eodhd_metadata')
+        uniq2 = self.one('SELECT count() FROM (SELECT symbol FROM eodhd_metadata '
+                         'GROUP BY symbol)')
+        dupes2 = (tot2 - uniq2) if tot2 and uniq2 else 0
+        print(f"  eodhd_metadata      : {tot2:,} baris, {uniq2:,} simbol unik "
+              f"-> {dupes2:,} duplikat sejati")
+        if dupes2:
+            self.note('duplikat metadata', dupes2, 'lebih dari satu baris per simbol')
+
+        if tot and per_day:
+            days = self.one("SELECT count() FROM (SELECT date_trunc('day', last_updated) d "
+                            "FROM eodhd_stock_metadata GROUP BY d)")
+            if days:
+                print(f"\n  pertumbuhan: ~{tot // days:,} baris per hari koleksi "
+                      f"(~{tot // days * 250:,}/tahun). Terpantau, belum perlu tindakan.")
 
     # ------------------------------------------------------------------
     def provenance(self):
