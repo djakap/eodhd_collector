@@ -49,6 +49,20 @@ EXPECTED_INTERVALS = {'5m', '15m', '30m', '1h', '4h', 'd', 'w', 'm'}
 # Intervals whose bars are stamped at midnight rather than within the session.
 EOD_INTERVALS = {'d', 'w', 'm'}
 
+# Hours each interval legitimately occupies, in UTC. IDX trades 02:00-09:00 UTC,
+# but 15m is the exception: EODHD serves 15m bars at 01:00 and 10:00 too, and
+# those 106,864 rows were confirmed real by querying the API for a sample of each
+# class — it returns a bar at exactly those timestamps. They are listed here so
+# the census stops reporting verified data as an anomaly. Everything else that
+# fell outside the session was checked the same way, found unrecognised by the
+# API, and removed (18,135 rows, see scripts/remove_out_of_session_junk.py).
+SESSION_HOURS = {
+    '5m':  set(range(2, 10)),
+    '15m': set(range(2, 10)) | {1, 10},
+    '1h':  set(range(2, 10)),
+    '4h':  set(range(2, 10)),
+}
+
 
 def hr(title):
     print(f"\n{'=' * 78}\n{title}\n{'=' * 78}")
@@ -209,7 +223,7 @@ class Audit:
                     counts.append((h, n))
             if not counts:
                 continue
-            inside = {0} if iv in EOD_INTERVALS else set(range(2, 10))
+            inside = SESSION_HOURS.get(iv, {0} if iv in EOD_INTERVALS else set(range(2, 10)))
             out = [(h, n) for h, n in counts if h not in inside]
             body = ' '.join(f"{h:02d}h={n:,}" for h, n in counts)
             print(f"  {iv:8s} {body}")
