@@ -48,7 +48,12 @@ BLOAT_KEYS = {
     'eodhd_stock_data': ('symbol', 'interval', 'timestamp'),
     'eodhd_corporate_actions': ('symbol', 'action_type', 'action_date'),
     'eodhd_metadata': ('symbol',),
-    'eodhd_stock_metadata': ('symbol', 'interval'),
+    # One row per (symbol, interval) PER COLLECTION DAY is this table's design —
+    # a freshness history, not a key-value store, and the writer already updates
+    # today's row rather than appending. Keyed on (symbol, interval) alone the
+    # ratio climbs every day with nothing wrong, and it reported "3x duplication"
+    # against a table whose real duplicate count is zero. The day belongs in the key.
+    'eodhd_stock_metadata': ('symbol', 'interval', "date_trunc('day', last_updated)"),
     'eodhd_calendar_events': ('symbol', 'event_type', 'event_date'),
     'eodhd_fundamentals': ('symbol', 'report_date', 'report_type'),
     'yf_fundamentals': ('symbol', 'period_end', 'statement', 'freq', 'line_item'),
@@ -155,13 +160,13 @@ def check_wal_health(cur, report: IntegrityReport, lag_warn: int = 5000):
 def check_partitions(cur, table: str, report: IntegrityReport):
     """Detect partitions that claim rows but occupy no disk (ghost partitions)."""
     cur.execute(f"""
-        SELECT name, numRows, diskSize, active, readOnly
+        SELECT name, numRows, diskSize, active, readOnly, minTimestamp, maxTimestamp
         FROM table_partitions('{table}')
     """)
     parts = cur.fetchall()
     ghosts = []
 
-    for name, num_rows, disk_size, active, read_only in parts:
+    for name, num_rows, disk_size, active, read_only, _tmin, _tmax in parts:
         if (num_rows or 0) > 0 and (disk_size or 0) == 0:
             ghosts.append((name, num_rows))
 
@@ -184,23 +189,37 @@ def deep_read_scan(cur, table: str, ts_col: str, parts, report: IntegrityReport,
     files behind them cannot be read. Aggregating over a real column is what
     surfaces the damage — the same failure a restore would hit.
 
-    Scoping is done with a partition-name prefix match rather than a date range:
-    partition names carry the granularity ('2026', '2026-07', '2026-07-20') and
-    deriving a range would mean re-deriving that granularity per table.
+    Scoping used a partition-name prefix match — `WHERE ts IN '2026-07'` — which
+    works only while every name is a plain date. QuestDB SPLITS a partition under
+    heavy out-of-order writes, producing names like '2026-07-22T045000-000001',
+    and that string is not a date: the query raises "Invalid date", the partition
+    is reported as corrupt, and the backup aborts on data that is perfectly fine.
+    Three such partitions appeared after a day of rebuilds and blocked the backup
+    entirely.
+
+    Ranges come from table_partitions() instead, which reports the true bounds of
+    every partition including split ones. Nothing has to be re-derived from a name.
     """
     fingerprints: List[Dict] = []
 
-    for name, num_rows, disk_size, active, read_only in parts:
+    for name, num_rows, disk_size, active, read_only, tmin_meta, tmax_meta in parts:
         if (num_rows or 0) == 0:
             continue
 
         agg = f"sum({value_column})" if value_column else f"count({ts_col})"
         try:
-            cur.execute(f"""
-                SELECT count(), min({ts_col}), max({ts_col}), {agg}
-                FROM "{table}"
-                WHERE {ts_col} IN '{name}'
-            """)
+            if tmin_meta is not None and tmax_meta is not None:
+                cur.execute(f"""
+                    SELECT count(), min({ts_col}), max({ts_col}), {agg}
+                    FROM "{table}"
+                    WHERE {ts_col} >= %s AND {ts_col} <= %s
+                """, (tmin_meta, tmax_meta))
+            else:
+                cur.execute(f"""
+                    SELECT count(), min({ts_col}), max({ts_col}), {agg}
+                    FROM "{table}"
+                    WHERE {ts_col} IN '{name}'
+                """)
             cnt, tmin, tmax, checksum = cur.fetchone()
         except Exception as e:
             report.fail(
@@ -296,7 +315,12 @@ def check_partition_bounds(cur, table: str, report: IntegrityReport):
         if not num_rows or min_ts is None:
             continue
         # Partition names are prefixes of the timestamps they hold: '2026',
-        # '2026-07', '2026-07-20'.
+        # '2026-07', '2026-07-20'. A SPLIT partition is the exception — QuestDB
+        # names those '2026-07-22T045000-000001' when it divides a partition under
+        # out-of-order writes, and the name is a start marker rather than a prefix.
+        # Prefix-matching them reported healthy data as misplaced.
+        if 'T' in name:
+            continue
         if not str(min_ts).startswith(name) or not str(max_ts).startswith(name):
             # A defect, not a blocker: the rows are readable and the archive
             # reproduces them exactly. What it breaks is querying, not restoring.
