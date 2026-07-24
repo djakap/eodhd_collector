@@ -57,9 +57,12 @@ deployments:
       # Intraday is DELAYED — EODHD publishes the day's intraday only AFTER close
       # (verified: available by ~19:15 WIB). Daytime sweeps just re-fetch stale data,
       # so ONE evening sweep is enough. 19:30 WIB weekday.
+      # DISABLED 2026-07-24: cutover to yfinance. This flow collects from EODHD
+      # into eodhd_stock_data (legacy). yfinance-price-update (21:30) is now the
+      # sole price collector, writing to stock_data.
       - cron: "30 19 * * 1-5"
         timezone: "Asia/Jakarta"
-        active: true
+        active: false
 
   # Weekly QuestDB local backup — gated by a deep integrity check, and the archive
   # is read back before old backups are rotated out.
@@ -97,14 +100,16 @@ deployments:
       lookback_days: 7      # re-fetch last 7 days when filling
       skip_intraday: false  # also fill intraday gaps
     schedules:
-      # Weekday daily gap-fill at 20:00 WIB — after IDX close.
+      # DISABLED 2026-07-24: cutover to yfinance. gap-check pulls from EODHD.
+      # yfinance's update_flow self-heals gaps of any length via its lookback
+      # anchored to each symbol's last stored bar, so a separate gap-check is
+      # no longer needed.
       - cron: "0 20 * * 1-5"
         timezone: "Asia/Jakarta"
-        active: true
-      # Saturday 08:00 WIB weekly run (runs before data-quality at 08:30).
+        active: false
       - cron: "0 8 * * 6"
         timezone: "Asia/Jakarta"
-        active: true
+        active: false
 
   # Test run (5 stocks only)
   - name: test-run
@@ -271,6 +276,8 @@ deployments:
       collect_eod: true
       collect_actions: true
     schedules:
+      # DISABLED 2026-07-24: cutover to yfinance. bulk-eod pulls the whole JK
+      # exchange from EODHD into eodhd_stock_data (legacy).
       - cron: "30 20 * * 1-5"   # Mon-Fri 20:30 WIB — after close + after gap-check (20:00)
         timezone: "Asia/Jakarta"
-        active: true
+        active: false

@@ -9,7 +9,13 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Table names
-TABLE_YF_STOCK_DATA = 'yf_stock_data'
+#
+# 'stock_data' — no source prefix — is the production price table as of the
+# 2026-07-24 cutover to yfinance. It was promoted from the former yf_stock_data
+# shadow, which stays as a backup until the new table is proven. The constant is
+# still named TABLE_YF_STOCK_DATA because yfinance is what fills it; the table it
+# points to is simply the canonical store now.
+TABLE_YF_STOCK_DATA = 'stock_data'
 TABLE_YF_FUNDAMENTALS = 'yf_fundamentals'
 TABLE_YF_VALUATION = 'yf_valuation_daily'
 TABLE_YF_ANALYST = 'yf_analyst_snapshot'

@@ -138,7 +138,7 @@ def compare(result: Dict) -> Dict:
 
 
 @flow(name="Data Audit", log_prints=True)
-def data_audit_flow(table: str = "eodhd_stock_data") -> Dict:
+def data_audit_flow(table: str = "stock_data") -> Dict:
     log = get_run_logger()
     result = run_audit(table)
     delta = compare(result)
