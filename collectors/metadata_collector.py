@@ -116,33 +116,55 @@ class MetadataCollector:
             return {'success': False, 'error': str(e)}
     
     def _insert_metadata(self, symbol: str, metadata: dict):
-        """Insert metadata into database"""
-        now = datetime.now()
-        
-        sql = f"""
-        INSERT INTO {TABLE_METADATA}
-        (symbol, exchange, name, sector, industry, currency,
-         last_price_update, has_dividends, is_active, created_at, updated_at)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """
-        
-        values = (
-            symbol,
-            metadata.get('Exchange', 'JK'),
-            metadata.get('Name', ''),
-            metadata.get('Sector', ''),
-            metadata.get('Industry', ''),
-            metadata.get('Currency', 'IDR'),
-            now,  # last_price_update
-            False,  # has_dividends (will be updated by action collector)
-            True,  # is_active
-            now,  # created_at
-            now   # updated_at
-        )
-        
+        Upsert one symbol's metadata.
+
+        eodhd_metadata is keyed by symbol and has DEDUP disabled (its designated
+        timestamp is updated_at, the insert time, which cannot be part of a dedup
+        key). A plain INSERT therefore appends a new row on every run — re-running
+        this collector once would have duplicated all 953 symbols. So it checks for
+        an existing row and UPDATEs it, inserting only when the symbol is new, the
+        same pattern QuestDBClient.upsert_stock_metadata already uses.
+
+        LEGACY: this pulls company metadata from EODHD, which is retired as of the
+        2026-07-24 cutover to yfinance (company profiles now come from yf_profile).
+        It is kept idempotent rather than removed so a stray manual run can do no
+        harm.
+        """
+        now = datetime.now()
+        exchange = metadata.get('Exchange', 'JK')
+        name = metadata.get('Name', '')
+        sector = metadata.get('Sector', '')
+        industry = metadata.get('Industry', '')
+        currency = metadata.get('Currency', 'IDR')
+
         try:
-            self.db_client.cursor.execute(sql, values)
-            logger.debug(f"Inserted metadata for {symbol}")
+            self.db_client.cursor.execute(
+                f"SELECT symbol FROM {TABLE_METADATA} WHERE symbol = %s LIMIT 1",
+                (symbol,))
+            exists = self.db_client.cursor.fetchone() is not None
+
+            if exists:
+                # updated_at is the designated timestamp and QuestDB refuses to
+                # update it in place, so freshness is tracked via last_price_update
+                # instead. updated_at keeps its original value on an existing row.
+                self.db_client.cursor.execute(f"""
+                    UPDATE {TABLE_METADATA}
+                    SET exchange = %s, name = %s, sector = %s, industry = %s,
+                        currency = %s, last_price_update = %s, is_active = %s
+                    WHERE symbol = %s
+                """, (exchange, name, sector, industry, currency, now, True,
+                      symbol))
+                logger.debug(f"Updated metadata for {symbol}")
+            else:
+                self.db_client.cursor.execute(f"""
+                    INSERT INTO {TABLE_METADATA}
+                    (symbol, exchange, name, sector, industry, currency,
+                     last_price_update, has_dividends, is_active, created_at, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """, (symbol, exchange, name, sector, industry, currency,
+                      now, False, True, now, now))
+                logger.debug(f"Inserted metadata for {symbol}")
         except Exception as e:
-            logger.error(f"Failed to insert metadata for {symbol}: {e}")
+            logger.error(f"Failed to upsert metadata for {symbol}: {e}")
             raise
