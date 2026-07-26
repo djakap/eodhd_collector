@@ -16,6 +16,13 @@ load_dotenv()
 # still named TABLE_YF_STOCK_DATA because yfinance is what fills it; the table it
 # points to is simply the canonical store now.
 TABLE_YF_STOCK_DATA = 'stock_data'
+
+# Corporate actions (dividends/splits) go to a fresh yfinance-native table, not the
+# legacy eodhd_corporate_actions, for the same reason prices did not splice: mixing
+# a raw-dividend source (EODHD) with an adjusted one (yfinance) in one table would
+# produce confusing near-duplicates. DEDUP on (action_date, symbol, action_type)
+# makes re-collection idempotent.
+TABLE_CORPORATE_ACTIONS_YF = 'corporate_actions'
 TABLE_YF_FUNDAMENTALS = 'yf_fundamentals'
 TABLE_YF_VALUATION = 'yf_valuation_daily'
 TABLE_YF_ANALYST = 'yf_analyst_snapshot'

@@ -153,3 +153,17 @@ CREATE TABLE yf_profile (
     ingested_at TIMESTAMP
 ) timestamp(ts) PARTITION BY YEAR WAL
   DEDUP UPSERT KEYS(ts, symbol);
+
+-- ============================================================================
+-- corporate_actions — yfinance-native dividends/splits (post-2026-07-24 cutover)
+-- Kept apart from legacy eodhd_corporate_actions so yfinance's adjusted dividend
+-- amounts do not mix with EODHD's raw ones. Seeded by backfill_flow, refreshed
+-- weekly by actions_flow. DEDUP makes re-collection idempotent.
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS corporate_actions (
+    symbol SYMBOL, action_type SYMBOL, action_date TIMESTAMP,
+    dividend_amount DOUBLE, dividend_currency SYMBOL, payment_date TIMESTAMP,
+    record_date TIMESTAMP, declaration_date TIMESTAMP, dividend_type SYMBOL,
+    split_ratio STRING, split_from INT, split_to INT, created_at TIMESTAMP
+) TIMESTAMP(action_date) PARTITION BY YEAR WAL
+  DEDUP UPSERT KEYS(action_date, symbol, action_type);

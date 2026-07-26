@@ -763,7 +763,7 @@ class QuestDBClient:
                 logger.error(f"Failed to insert price data after reconnect: {e2}")
                 raise
     
-    def insert_corporate_actions(self, records: List[Dict]):
+    def insert_corporate_actions(self, records: List[Dict], table: Optional[str] = None):
         """
         Insert corporate actions (dividends/splits).
 
@@ -772,12 +772,17 @@ class QuestDBClient:
         rows dated 1970-01-01 from an earlier code path, so the guard belongs at the
         single point every writer passes through rather than in each caller.
         A dividend with no date is not a dividend — dropping it loses nothing.
+
+        `table` defaults to the legacy EODHD actions table; the yfinance collector
+        passes the fresh corporate_actions table so post-cutover actions do not mix
+        with EODHD's.
         """
         if not records:
             return
 
+        table = table or TABLE_CORPORATE_ACTIONS
         sql = f"""
-        INSERT INTO {TABLE_CORPORATE_ACTIONS}
+        INSERT INTO {table}
         (symbol, action_type, action_date, dividend_amount, dividend_currency,
          payment_date, record_date, declaration_date, dividend_type,
          split_ratio, split_from, split_to, created_at)

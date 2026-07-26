@@ -40,6 +40,8 @@ from config.yfinance_config import (
     YF_INTRADAY_FULL_DAYS,
     YF_UPDATE_WINDOW_DAYS,
     YF_PRICE_TABLE,
+    TABLE_YF_STOCK_DATA,
+    TABLE_CORPORATE_ACTIONS_YF,
 )
 
 logger = logging.getLogger(__name__)
@@ -50,10 +52,12 @@ class YFinancePriceCollector:
 
     def __init__(self, update_mode: bool = False,
                  update_window: int = YF_UPDATE_WINDOW_DAYS,
-                 target_table: str = YF_PRICE_TABLE):
+                 target_table: str = YF_PRICE_TABLE,
+                 actions_table: str = TABLE_CORPORATE_ACTIONS_YF):
         self.update_mode = update_mode
         self.update_window = update_window
         self.target_table = target_table
+        self.actions_table = actions_table
         self.api = YFinanceClient()
         self.db = QuestDBClient()
         self.db.connect()
@@ -173,20 +177,25 @@ class YFinancePriceCollector:
         offers no date filter. DEDUP on (action_date, symbol, action_type) makes
         the repetition free, which is exactly why that table was rebuilt first.
 
-        There is no shadow table for corporate actions, so writing while the price
-        collector is still shadowing would overwrite EODHD's dividend values —
-        which drift, since EODHD reports the adjusted amount. collect_all()
-        therefore skips this until the collector owns the production price table.
+        Writes to the fresh corporate_actions table (self.actions_table), kept
+        apart from the legacy eodhd_corporate_actions so yfinance's adjusted
+        dividend amounts do not mix with EODHD's. DEDUP on the business key makes
+        the full re-fetch idempotent. Skipped while the price collector is still
+        shadowing a non-production table.
         """
         records = self.api.get_dividends(symbol) + self.api.get_splits(symbol)
         if not records:
             return 0
-        self.db.insert_corporate_actions(records)
+        self.db.insert_corporate_actions(records, table=self.actions_table)
         return len(records)
 
     @property
     def is_shadowing(self) -> bool:
-        return self.target_table != TABLE_STOCK_DATA
+        # Production is stock_data now (TABLE_YF_STOCK_DATA). Writing anywhere else
+        # — a scratch or comparison table — is shadowing, and shadowing skips
+        # corporate actions. Before cutover this compared against eodhd_stock_data;
+        # that table is legacy, so the check now names the live production table.
+        return self.target_table != TABLE_YF_STOCK_DATA
 
     def collect_all(self, symbol: str, skip_intraday: bool = False,
                     skip_actions: Optional[bool] = None) -> Dict:

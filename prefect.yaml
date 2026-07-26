@@ -259,6 +259,25 @@ deployments:
         timezone: "Asia/Jakarta"
         active: true
 
+  # Weekly yfinance dividends/splits into corporate_actions. Separate from the
+  # nightly price update because actions change rarely and yfinance returns the
+  # whole history per call — collecting them every night would roughly double the
+  # rate-limit exposure for no benefit. DEDUP makes each run idempotent.
+  - name: yfinance-actions
+    entrypoint: flows/yfinance_price_flow.py:actions_flow
+    description: "Weekly yfinance dividends/splits into corporate_actions"
+    work_pool:
+      name: default-agent-pool
+    concurrency_limit:
+      limit: 1
+      collision_strategy: CANCEL_NEW
+    parameters:
+      stocks_file: config/syariah_stocks.txt
+    schedules:
+      - cron: "0 11 * * 6"   # Saturday 11:00 WIB — after fundamentals-sweep (10:00)
+        timezone: "Asia/Jakarta"
+        active: true
+
   # Bulk last-day EOD/dividends/splits for the WHOLE exchange (1 request = 100 calls each,
   # vs ~651 per-symbol). INACTIVE until the bulk endpoint + exchange code are verified
   # after quota reset (run scripts/test_bulk.py). Activate, then drop EOD/actions from

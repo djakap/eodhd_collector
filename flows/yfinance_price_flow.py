@@ -39,10 +39,11 @@ logger = logging.getLogger(__name__)
 
 @task(name="Collect yfinance prices", retries=1, retry_delay_seconds=300)
 def collect_prices(symbols: List[str], update_mode: bool,
-                   update_window: int, skip_intraday: bool) -> Dict:
+                   update_window: int, skip_intraday: bool,
+                   skip_actions: bool = True) -> Dict:
     log = get_run_logger()
 
-    totals = {'eod': 0, 'intraday': 0}
+    totals = {'eod': 0, 'intraday': 0, 'actions': 0}
     failures: List[str] = []
     consecutive_failures = 0
     aborted = False
@@ -50,11 +51,13 @@ def collect_prices(symbols: List[str], update_mode: bool,
     with YFinancePriceCollector(update_mode=update_mode,
                                 update_window=update_window) as collector:
         log.info(f"Writing to {collector.target_table} "
-                 f"(shadow={collector.is_shadowing}, update_mode={update_mode})")
+                 f"(shadow={collector.is_shadowing}, update_mode={update_mode}, "
+                 f"skip_actions={skip_actions})")
 
         for i, symbol in enumerate(symbols, 1):
             try:
-                result = collector.collect_all(symbol, skip_intraday=skip_intraday)
+                result = collector.collect_all(symbol, skip_intraday=skip_intraday,
+                                               skip_actions=skip_actions)
             except RateLimitedError as e:
                 log.error(f"Aborting at {symbol}: {e}")
                 aborted = True
@@ -72,12 +75,14 @@ def collect_prices(symbols: List[str], update_mode: bool,
                 consecutive_failures = 0
                 totals['eod'] += result['eod']
                 totals['intraday'] += result['intraday']
+                totals['actions'] += result['actions']
 
             if i % 50 == 0:
                 log.info(f"  {i}/{len(symbols)} — {totals['eod']:,} EOD, "
                          f"{totals['intraday']:,} intraday bars")
 
-    log.info(f"Done: {totals['eod']:,} EOD + {totals['intraday']:,} intraday bars, "
+    log.info(f"Done: {totals['eod']:,} EOD + {totals['intraday']:,} intraday bars"
+             f" + {totals['actions']:,} corporate actions, "
              f"{len(failures)} symbols with no data"
              + (" (ABORTED EARLY)" if aborted else ""))
     if failures:
@@ -88,6 +93,7 @@ def collect_prices(symbols: List[str], update_mode: bool,
         'symbols_failed': len(failures),
         'eod_bars': totals['eod'],
         'intraday_bars': totals['intraday'],
+        'action_records': totals['actions'],
         'aborted': aborted,
     }
 
@@ -96,12 +102,13 @@ def collect_prices(symbols: List[str], update_mode: bool,
 def backfill_flow(stocks_file: str = "config/syariah_stocks.txt",
                   limit: Optional[int] = None,
                   skip_intraday: bool = False) -> Dict:
-    """One-off seed of the shadow table with all history yfinance offers."""
+    """One-off seed of the price table with all history yfinance offers, plus
+    the full dividend/split history (skip_actions=False)."""
     log = get_run_logger()
     symbols = load_symbols(stocks_file, limit)
     log.info(f"Backfilling {len(symbols)} symbols into {YF_PRICE_TABLE}")
-    result = collect_prices(symbols, update_mode=False,
-                            update_window=0, skip_intraday=skip_intraday)
+    result = collect_prices(symbols, update_mode=False, update_window=0,
+                            skip_intraday=skip_intraday, skip_actions=False)
     log.info(f"Backfill result: {result}")
     return result
 
@@ -115,10 +122,51 @@ def update_flow(stocks_file: str = "config/syariah_stocks.txt",
     log = get_run_logger()
     symbols = load_symbols(stocks_file, limit)
     log.info(f"Updating {len(symbols)} symbols in {YF_PRICE_TABLE}")
-    result = collect_prices(symbols, update_mode=True,
-                            update_window=update_window, skip_intraday=skip_intraday)
+    # Nightly stays lean: prices only. Corporate actions rarely change and a full
+    # re-fetch of all symbols would roughly double the yfinance call count and the
+    # rate-limit exposure of every evening run. actions_flow refreshes them weekly.
+    result = collect_prices(symbols, update_mode=True, update_window=update_window,
+                            skip_intraday=skip_intraday, skip_actions=True)
     log.info(f"Update result: {result}")
     return result
+
+
+@flow(name="yfinance Corporate Actions", log_prints=True)
+def actions_flow(stocks_file: str = "config/syariah_stocks.txt",
+                 limit: Optional[int] = None) -> Dict:
+    """
+    Collect dividends and splits only, into corporate_actions.
+
+    Separate from the price flows and scheduled weekly, because actions change
+    rarely and yfinance returns the whole history per call — nightly collection
+    would be wasted API load. DEDUP on the business key makes each run idempotent.
+    """
+    log = get_run_logger()
+    symbols = load_symbols(stocks_file, limit)
+    log.info(f"Collecting corporate actions for {len(symbols)} symbols")
+
+    total, failed, aborted = 0, 0, False
+    with YFinancePriceCollector(update_mode=True) as collector:
+        log.info(f"Writing actions to {collector.actions_table}")
+        for i, symbol in enumerate(symbols, 1):
+            try:
+                total += collector.collect_actions(symbol)
+            except RateLimitedError as e:
+                log.error(f"Aborting at {symbol}: {e}")
+                aborted = True
+                break
+            except Exception as e:
+                log.error(f"{symbol}: {type(e).__name__}: {e}")
+                failed += 1
+            finally:
+                collector.api.pause_between_symbols()
+            if i % 100 == 0:
+                log.info(f"  {i}/{len(symbols)} — {total:,} action records")
+
+    log.info(f"Done: {total:,} action records, {failed} failures"
+             + (" (ABORTED EARLY)" if aborted else ""))
+    return {'symbols': len(symbols), 'action_records': total,
+            'failed': failed, 'aborted': aborted}
 
 
 if __name__ == "__main__":
