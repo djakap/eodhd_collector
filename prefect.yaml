@@ -200,14 +200,12 @@ deployments:
         timezone: "Asia/Jakarta"
         active: true
 
-  # Daily read-only census of eodhd_stock_data. This is the answer to "every time
-  # I ask for a check there is damage": there was never a routine check, so each
-  # one surfaced months of accumulated drift at once. Run daily, the report is a
-  # boring delta, and anything new in it is a real signal rather than an
-  # excavation. Writes nothing, so it is safe to run beside the collectors.
+  # DISABLED 2026-07-27: folded into nightly-data-check, which runs the same census
+  # AND checks completeness/freshness AND heals missing symbols in one nightly pass.
+  # Running both would run the census twice and corrupt the day-over-day comparison.
   - name: data-audit
     entrypoint: flows/data_audit_flow.py:data_audit_flow
-    description: "Daily read-only census: empty bars, unknown intervals, duplicate periods"
+    description: "Daily read-only census (superseded by nightly-data-check)"
     work_pool:
       name: default-agent-pool
     concurrency_limit:
@@ -215,10 +213,28 @@ deployments:
       collision_strategy: CANCEL_NEW
     parameters: {}
     schedules:
-      # 20:20 WIB — twenty minutes after gap-check starts, so the census is not
-      # reading a table mid-write. Overlapping them produced no benefit and risked
-      # a spurious delta, which is the one thing this job must not manufacture.
       - cron: "20 20 * * *"
+        timezone: "Asia/Jakarta"
+        active: false
+
+  # Nightly self-monitoring: quality census + completeness/freshness + targeted
+  # heal, in one pass, every night. Runs at 22:30 WIB, after the 21:30 price update
+  # finishes (~22:00), so it verifies the night's collection and fills any gap a
+  # failed/partial run left. Fails loudly if quality regresses, data goes stale, or
+  # a systemic gap persists — turning the migration watch from manual checking into
+  # a pipeline that tells you when something is wrong.
+  - name: nightly-data-check
+    entrypoint: flows/nightly_check_flow.py:nightly_check_flow
+    description: "Nightly quality + completeness check with targeted gap-heal"
+    work_pool:
+      name: default-agent-pool
+    concurrency_limit:
+      limit: 1
+      collision_strategy: CANCEL_NEW
+    parameters:
+      stocks_file: config/syariah_stocks.txt
+    schedules:
+      - cron: "30 22 * * *"   # every night 22:30 WIB, after the price update
         timezone: "Asia/Jakarta"
         active: true
 
