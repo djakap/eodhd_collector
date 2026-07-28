@@ -14,8 +14,9 @@ COPY db/ db/
 COPY flows/ flows/
 COPY utils/ utils/
 COPY scripts/ scripts/
-COPY main_ultrafast.py .
-COPY collect_metadata.py .
+# main_ultrafast.py and collect_metadata.py were archived to scripts/legacy_eodhd/
+# at the 2026-07-28 cleanup (retired EODHD ad-hoc scripts), already covered by the
+# scripts/ copy above.
 COPY prefect.yaml .
 
 # Create logs directory

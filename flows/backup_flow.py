@@ -92,6 +92,55 @@ def verify_integrity(deep: bool = True) -> Dict:
     return report.manifest
 
 
+def _snapshot_conn():
+    conn = psycopg2.connect(
+        host=QUESTDB_HOST, port=QUESTDB_PG_PORT, user=QUESTDB_USER,
+        password=QUESTDB_PASSWORD, database=QUESTDB_DATABASE,
+    )
+    conn.autocommit = True
+    return conn
+
+
+@task(name="snapshot-prepare")
+def snapshot_prepare():
+    """
+    Hold a consistent, immutable view of the data files for the duration of the
+    tar. Without this the backup tars a LIVE database: QuestDB rewrites partition
+    files (WAL apply, merges) and the intraday flow writes while the archive is
+    being built, so files change mid-read and the archive fails verification
+    ("30,612 files readable but 30,624 were archived"). SNAPSHOT PREPARE pins the
+    files being copied so writes continue into new files instead.
+    """
+    logger = get_run_logger()
+    conn = _snapshot_conn()
+    cur = conn.cursor()
+    try:
+        # Release any snapshot left dangling by a previously crashed backup
+        # (e.g. the laptop slept mid-run) — otherwise PREPARE errors.
+        try:
+            cur.execute("SNAPSHOT COMPLETE")
+        except Exception:
+            pass
+        cur.execute("SNAPSHOT PREPARE")
+        logger.info("SNAPSHOT PREPARE — data files pinned for a consistent copy")
+    finally:
+        conn.close()
+
+
+@task(name="snapshot-complete")
+def snapshot_complete():
+    """Release the snapshot so QuestDB resumes normal housekeeping. Always run,
+    even when the tar failed, so a snapshot is never left held."""
+    logger = get_run_logger()
+    conn = _snapshot_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute("SNAPSHOT COMPLETE")
+        logger.info("SNAPSHOT COMPLETE — snapshot released")
+    finally:
+        conn.close()
+
+
 @task(name="tar-questdb-data")
 def create_backup(backup_name: str) -> Dict:
     logger = get_run_logger()
@@ -285,10 +334,16 @@ def questdb_backup_flow(keep_local_backups: int = 5, deep_check: bool = True):
     # Gate first — never archive a database that failed verification.
     manifest = verify_integrity(deep=deep_check)
 
-    backup = create_backup(backup_name)
-    verified = verify_archive(backup)
-    manifest_path = write_manifest(backup_name, manifest, backup, verified)
+    # Pin a consistent snapshot around the tar, and always release it — even if the
+    # archive step raises — so a crashed backup never leaves a snapshot held.
+    snapshot_prepare()
+    try:
+        backup = create_backup(backup_name)
+        verified = verify_archive(backup)
+    finally:
+        snapshot_complete()
 
+    manifest_path = write_manifest(backup_name, manifest, backup, verified)
     cleanup_old_backups(keep_local_backups)
 
     logger.info(f"Done — archive and manifest in {BACKUP_DIR}")

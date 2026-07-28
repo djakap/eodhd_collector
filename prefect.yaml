@@ -158,9 +158,12 @@ deployments:
       run_symbols: true
       run_partitions: true
     schedules:
+      # DISABLED 2026-07-28: this flow audits eodhd_stock_data (TABLE_STOCK_DATA in
+      # db_config), which is the retired legacy table. stock_data is now covered by
+      # nightly-data-check. Left defined but inactive rather than deleted.
       - cron: "30 8 * * 6"   # Saturday 08:30 WIB — AFTER gap-check (08:00) fills the week's gaps
         timezone: "Asia/Jakarta"
-        active: true
+        active: false
 
   # Weekly yfinance fundamentals sweep — financial statements, profiles, analyst estimates.
   # Heaviest yfinance job (~9 requests/symbol), so it runs once a week and AFTER the
