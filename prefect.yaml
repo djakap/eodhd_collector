@@ -275,6 +275,29 @@ deployments:
         timezone: "Asia/Jakarta"
         active: true
 
+  # Live intraday: batch-fetch 1h for all symbols and derive 4h, hourly through the
+  # IDX session. One yf.download call pulls all 651 in ~19s (vs ~11 min per-symbol),
+  # so hourly collection stays light enough not to trip the rate limit. 4h is
+  # derived from the fetched 1h (no extra API calls) and completes at the 12:00 and
+  # 16:00 WIB session boundaries. The current hour's bar is partial until the 21:30
+  # end-of-day run finalises it.
+  - name: intraday-live
+    entrypoint: flows/intraday_flow.py:intraday_flow
+    description: "Hourly batch 1h + derived 4h during the IDX session"
+    work_pool:
+      name: default-agent-pool
+    concurrency_limit:
+      limit: 1
+      collision_strategy: CANCEL_NEW
+    parameters:
+      stocks_file: config/syariah_stocks.txt
+    schedules:
+      # :20 past each session hour 09-16 WIB (weekdays), ~15-20 min after each hour
+      # closes so the completed bar is available, plus the current partial bar.
+      - cron: "20 9-16 * * 1-5"
+        timezone: "Asia/Jakarta"
+        active: true
+
   # Weekly yfinance dividends/splits into corporate_actions. Separate from the
   # nightly price update because actions change rarely and yfinance returns the
   # whole history per call — collecting them every night would roughly double the
