@@ -28,7 +28,18 @@ services:
   # Prefect Server — orchestration UI + API (localhost:4200)
   # -----------------------------------------------------------------------
   prefect-server:
-    image: prefecthq/prefect:3-latest
+    # Pinned instead of the rolling :3-latest tag: a background `docker compose
+    # pull` must not silently swap the Prefect version out from under this
+    # pipeline. Kept == the worker's client version (requirements-prefect.txt,
+    # pinned to match) so the server never trails the client.
+    # Do NOT bump to 3.7.x: tested 3.7.8 on 2026-07-29 and it throws persistent
+    # SQLite "database is locked" errors on the worker-poll `UPDATE deployment
+    # SET last_polled` writes (a row-lock pattern that doesn't fit SQLite's
+    # whole-db lock); 3.6.18 has none. A 3.7.x move would need a Postgres backend
+    # first. `prefect server start` runs the webserver AND the in-process loop
+    # services (scheduler, late-runs, ...) — do NOT add --no-services, that turns
+    # the scheduler off.
+    image: prefecthq/prefect:3.6.18-python3.12
     container_name: prefect-server
     restart: unless-stopped
     command: prefect server start --host 0.0.0.0
