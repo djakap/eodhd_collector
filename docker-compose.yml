@@ -94,6 +94,10 @@ services:
         prefect work-pool create default-agent-pool --type process 2>/dev/null || true &&
         echo 'Deploying flows...' &&
         prefect deploy --all &&
+        echo 'Clearing orphaned runs (free stuck concurrency slots)...' &&
+        python scripts/clear_orphan_runs.py || true &&
+        echo 'Healing suspended WAL tables (recover from corrupt segments)...' &&
+        python scripts/heal_suspended_wal.py || true &&
         echo 'Starting worker...' &&
         prefect worker start --pool default-agent-pool
       "

@@ -43,6 +43,7 @@ from flows.fundamentals_flow import load_symbols
 from flows.data_audit_flow import run_audit, compare      # reuse the quality census
 from api.yfinance_client import RateLimitedError
 from collectors.yfinance_price_collector import YFinancePriceCollector
+from scripts.heal_suspended_wal import heal as heal_wal
 
 PROD = 'stock_data'
 COVERAGE_FLOOR = 0.90        # a "settled" day is one ≥90% of symbols reached
@@ -127,9 +128,35 @@ def quality(table: str) -> Dict:
     return delta
 
 
+@task(name="Self-heal suspended WAL")
+def self_heal_wal() -> int:
+    """Resume any QuestDB table whose WAL apply has been suspended.
+
+    A corrupt WAL segment — the signature of an unclean shutdown on this laptop —
+    suspends the table and silently freezes its data: on 2026-08-03 that had
+    hidden a MONTH of stock_data behind a stack that looked perfectly healthy.
+    The worker only heals this at startup, so a suspension beginning mid-day
+    would otherwise sit undetected until the next restart; checking here caps
+    that exposure at one day.
+
+    Note this deliberately does NOT also run clear_orphan_runs: that marks every
+    non-terminal run terminal, which from inside a flow would kill this very run.
+    Orphan clearing stays a worker-startup step.
+    """
+    log = get_run_logger()
+    healed = heal_wal()
+    if healed:
+        log.warning(f"WAL tersuspend dipulihkan: {healed} tabel")
+    return healed
+
+
 @flow(name="Nightly Data Check", log_prints=True)
 def nightly_check_flow(stocks_file: str = "config/syariah_stocks.txt") -> Dict:
     log = get_run_logger()
+
+    # 0. un-stick any suspended WAL before anything reads stock_data — a
+    #    suspended table serves stale data that looks perfectly plausible.
+    self_heal_wal()
 
     # 1. quality (read-only census, fails on regression inside compare via history)
     q = quality(PROD)
