@@ -137,7 +137,7 @@ deployments:
       name: host-pool
     pull:
       - prefect.deployments.steps.set_working_directory:
-          directory: /home/djp/eodhd_collector_optimized
+          directory: /home/djp/quant/eodhd_collector
     parameters:
       latest_only: true
     schedules: []  # manual only — trigger from UI after running questdb-backup

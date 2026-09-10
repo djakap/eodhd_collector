@@ -159,7 +159,7 @@ Create export script:
 ```python
 # export_for_powerbi.py
 import sys
-sys.path.insert(0, '/home/djp/eodhd_collector_optimized')
+sys.path.insert(0, '/home/djp/quant/eodhd_collector')
 
 from db.questdb_client import QuestDBClient
 import pandas as pd

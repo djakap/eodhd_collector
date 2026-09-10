@@ -1,3 +1,10 @@
+# Project name is pinned here so the stack no longer depends on the folder name.
+# It used to: the folder was `eodhd_collector_optimized`, Compose derived the volume
+# names from it, and every invocation needed `-p eodhd_collector_optimized` or Docker
+# would silently attach empty volumes. The volumes below are now named explicitly
+# (see the note there), so this name is free to change without touching any data.
+name: eodhd_collector
+
 services:
   # -----------------------------------------------------------------------
   # QuestDB — time-series database
@@ -112,9 +119,20 @@ services:
       # To change flow code or schedules now: `docker compose build prefect-worker && docker compose up -d prefect-worker`.
 
 volumes:
+  # Every volume is named EXPLICITLY and marked external. Compose otherwise prefixes
+  # the project name onto a volume's name, which tied this stack's data to the folder
+  # it happened to live in: renaming the folder pointed Prefect at a brand-new empty
+  # volume and the entire run history looked lost. The `eodhd_collector_optimized_`
+  # prefix below is the ORIGINAL folder's name, kept because it is what the existing
+  # volumes are actually called on disk — it is an inert label now, not a dependency.
+  # `external: true` also makes a missing volume fail loudly instead of being recreated
+  # empty and quietly losing history.
   questdb_data:
-    # Use existing volume if available, otherwise create new
     name: quest-db_questdb_data
     external: true
   prefect_data:
+    name: eodhd_collector_optimized_prefect_data
+    external: true
   worker_logs:
+    name: eodhd_collector_optimized_worker_logs
+    external: true

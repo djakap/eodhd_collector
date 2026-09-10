@@ -40,7 +40,7 @@ eodhd_collector/
 ### 1. Install Dependencies
 
 ```bash
-cd /home/djp/eodhd_collector
+cd /home/djp/quant/eodhd_collector
 pip install -r requirements.txt
 ```
 
