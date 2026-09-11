@@ -32,7 +32,11 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from api.yfinance_client import YFinanceClient, RateLimitedError, MAX_LOOKBACK_DAYS
 from db.questdb_client import QuestDBClient
-from config.db_config import TABLE_STOCK_DATA
+from config.tables import (
+    TABLE_ACTIONS_PRODUCTION,
+    TABLE_PRICES_LEGACY_EODHD,
+    TABLE_PRICES_PRODUCTION,
+)
 from config.yfinance_config import (
     YF_EOD_PERIODS,
     YF_INTRADAY_INTERVALS,
@@ -40,8 +44,6 @@ from config.yfinance_config import (
     YF_INTRADAY_FULL_DAYS,
     YF_UPDATE_WINDOW_DAYS,
     YF_PRICE_TABLE,
-    TABLE_YF_STOCK_DATA,
-    TABLE_CORPORATE_ACTIONS_YF,
 )
 
 logger = logging.getLogger(__name__)
@@ -53,7 +55,7 @@ class YFinancePriceCollector:
     def __init__(self, update_mode: bool = False,
                  update_window: int = YF_UPDATE_WINDOW_DAYS,
                  target_table: str = YF_PRICE_TABLE,
-                 actions_table: str = TABLE_CORPORATE_ACTIONS_YF):
+                 actions_table: str = TABLE_ACTIONS_PRODUCTION):
         self.update_mode = update_mode
         self.update_window = update_window
         self.target_table = target_table
@@ -131,10 +133,10 @@ class YFinancePriceCollector:
 
         self.db.insert_price_data(rows, table=self.target_table)
 
-        # Metadata tracking is only meaningful once this collector owns the
-        # production table; while shadowing it would overwrite EODHD's freshness
-        # markers and confuse gap-check.
-        if self.target_table == TABLE_STOCK_DATA:
+        # Keep production metadata writes unreachable until QCF-002 corrects
+        # total_records semantics. Comparing with the legacy table preserves the
+        # pre-QCF-001 behaviour deliberately.
+        if self.target_table == TABLE_PRICES_LEGACY_EODHD:
             stamps = [r['timestamp'] for r in records]
             self.db.upsert_stock_metadata(
                 symbol, interval,
@@ -191,11 +193,11 @@ class YFinancePriceCollector:
 
     @property
     def is_shadowing(self) -> bool:
-        # Production is stock_data now (TABLE_YF_STOCK_DATA). Writing anywhere else
+        # Production is stock_data now. Writing anywhere else
         # — a scratch or comparison table — is shadowing, and shadowing skips
         # corporate actions. Before cutover this compared against eodhd_stock_data;
         # that table is legacy, so the check now names the live production table.
-        return self.target_table != TABLE_YF_STOCK_DATA
+        return self.target_table != TABLE_PRICES_PRODUCTION
 
     def collect_all(self, symbol: str, skip_intraday: bool = False,
                     skip_actions: Optional[bool] = None) -> Dict:

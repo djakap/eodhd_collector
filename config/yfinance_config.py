@@ -6,23 +6,12 @@
 import os
 from dotenv import load_dotenv
 
+from config.tables import TABLE_PRICES_PRODUCTION
+
 load_dotenv()
 
-# Table names
-#
-# 'stock_data' — no source prefix — is the production price table as of the
-# 2026-07-24 cutover to yfinance. It was promoted from the former yf_stock_data
-# shadow, which stays as a backup until the new table is proven. The constant is
-# still named TABLE_YF_STOCK_DATA because yfinance is what fills it; the table it
-# points to is simply the canonical store now.
-TABLE_YF_STOCK_DATA = 'stock_data'
-
-# Corporate actions (dividends/splits) go to a fresh yfinance-native table, not the
-# legacy eodhd_corporate_actions, for the same reason prices did not splice: mixing
-# a raw-dividend source (EODHD) with an adjusted one (yfinance) in one table would
-# produce confusing near-duplicates. DEDUP on (action_date, symbol, action_type)
-# makes re-collection idempotent.
-TABLE_CORPORATE_ACTIONS_YF = 'corporate_actions'
+# Source-specific yfinance tables. Source-neutral production and legacy table
+# authority is defined in config.tables.
 TABLE_YF_FUNDAMENTALS = 'yf_fundamentals'
 TABLE_YF_VALUATION = 'yf_valuation_daily'
 TABLE_YF_ANALYST = 'yf_analyst_snapshot'
@@ -118,10 +107,9 @@ PROFILE_FIELDS = {
 YF_EOD_PERIODS = ['d', 'w', 'm']
 YF_INTRADAY_INTERVALS = ['1h']
 
-# Where the price collector writes. During the parallel run this is the shadow
-# table, so EODHD's rows stay intact and the two can be compared; clearing it (or
-# setting it to 'eodhd_stock_data') switches the collector to production at cutover.
-YF_PRICE_TABLE = os.getenv('YF_PRICE_TABLE', TABLE_YF_STOCK_DATA)
+# Where the price collector writes. Production is the default; the environment
+# override remains available for an explicitly selected scratch/comparison table.
+YF_PRICE_TABLE = os.getenv('YF_PRICE_TABLE', TABLE_PRICES_PRODUCTION)
 
 # How far back a full (non-incremental) collection reaches.
 YF_EOD_PERIOD_FULL = 'max'

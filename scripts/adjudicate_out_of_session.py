@@ -33,9 +33,10 @@ import psycopg2
 from dotenv import load_dotenv
 
 from config.db_config import (
-    TABLE_STOCK_DATA, QUESTDB_HOST, QUESTDB_PG_PORT,
+    QUESTDB_HOST, QUESTDB_PG_PORT,
     QUESTDB_USER, QUESTDB_PASSWORD, QUESTDB_DATABASE,
 )
+from config.tables import TABLE_PRICES_LEGACY_EODHD
 
 load_dotenv()
 BASE = "https://eodhd.com/api"
@@ -77,7 +78,7 @@ def main():
     for iv in INTRADAY + ('d',):
         inside = "hour(timestamp) = 0" if iv == 'd' else \
                  f"hour(timestamp) >= {SESSION.start} AND hour(timestamp) < {SESSION.stop}"
-        cur.execute(f"""SELECT symbol, timestamp, close, volume FROM "{TABLE_STOCK_DATA}"
+        cur.execute(f"""SELECT symbol, timestamp, close, volume FROM "{TABLE_PRICES_LEGACY_EODHD}"
                         WHERE interval = %s AND NOT ({inside})""", (iv,))
         for s, ts, cl, vol in cur.fetchall():
             classes[(iv, ts.hour)].append((s, ts, cl, vol))

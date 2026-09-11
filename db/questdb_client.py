@@ -23,8 +23,6 @@ except ImportError:
 
 from config.db_config import (
     PG_CONNECTION_STRING,
-    TABLE_STOCK_DATA,
-    TABLE_CORPORATE_ACTIONS,
     TABLE_CALENDAR_EVENTS,
     TABLE_METADATA,
     TABLE_STOCK_METADATA,
@@ -258,13 +256,15 @@ class QuestDBClient:
                 self.conn.close()
                 logger.info("Disconnected from QuestDB")
     
-    def get_existing_timestamps(self, symbol: str, interval: str, retries=2) -> set:
+    def get_existing_timestamps(self, symbol: str, interval: str, table: str,
+                                retries=2) -> set:
         """
         Get existing timestamps for a symbol/interval to avoid duplicates
         
         Args:
             symbol: Stock symbol (e.g., 'BBCA.JK')
             interval: Data interval (e.g., 'd', '5m')
+            table: Table from which existing timestamps are read
             retries: Number of retry attempts for mmap failures
         
         Returns:
@@ -276,7 +276,7 @@ class QuestDBClient:
                 self.ensure_connection()
                 self.cursor.execute(f"""
                     SELECT DISTINCT timestamp 
-                    FROM {TABLE_STOCK_DATA} 
+                    FROM {table}
                     WHERE symbol = %s AND interval = %s
                 """, (symbol, interval))
                 return {row[0] for row in self.cursor.fetchall()}
@@ -549,7 +549,7 @@ class QuestDBClient:
             logger.warning(f"[{table}] penyaringan {len(records)} baris -> {summary}")
         return kept
 
-    def insert_price_data(self, records, table: Optional[str] = None):
+    def insert_price_data(self, records, table: str):
         """
         Insert price data records using ILP (fastest) or SQL fallback
 
@@ -557,16 +557,12 @@ class QuestDBClient:
             records: List of tuples (symbol, interval, timestamp, open, high, low,
                     close, adjusted_close, volume, gmtoffset, source, created_at)
                     OR List of dicts (backward compatible)
-            table: Target table, defaulting to the production price table. Used by
-                   the yfinance collector to write into a shadow table during the
-                   parallel run — both sources share a dedup key, so writing them to
-                   the same table would leave only the last writer's values and make
-                   any comparison impossible.
+            table: Required target table. Callers must choose production, legacy,
+                   or a migration table explicitly.
         """
         if not records:
             return
 
-        table = table or TABLE_STOCK_DATA
         records = self._screen_records(records, table)
         if not records:
             return
@@ -590,7 +586,7 @@ class QuestDBClient:
         # Fallback to SQL insert (still fast with execute_batch)
         self._insert_price_data_sql(records, table)
     
-    def _insert_price_data_ilp(self, records, table=None):
+    def _insert_price_data_ilp(self, records, table: str):
         """Insert using QuestDB ILP protocol (10-100x faster than SQL)"""
         if not HAS_ILP:
             raise ImportError("questdb library not available")
@@ -648,7 +644,7 @@ class QuestDBClient:
                             # volume must be int (LONG in QuestDB), gmtoffset must be int (INT in QuestDB)
                             # Sending float for integer columns causes ILP cast error and row rejection
                             sender.row(
-                                table or TABLE_STOCK_DATA,
+                                table,
                                 symbols={
                                     'symbol': str(row['symbol']),
                                     'interval': str(row['interval']),
@@ -695,9 +691,8 @@ class QuestDBClient:
                         # Final attempt failed or non-connection error
                         raise Exception(f"ILP insert failed after {attempt + 1} attempts: {error_msg}")
     
-    def _insert_price_data_sql(self, records, table=None):
+    def _insert_price_data_sql(self, records, table: str):
         """Insert using SQL (slower but compatible fallback)"""
-        table = table or TABLE_STOCK_DATA
         sql = f"""
         INSERT INTO {table} 
         (symbol, interval, timestamp, open, high, low, close, adjusted_close, 
@@ -763,7 +758,7 @@ class QuestDBClient:
                 logger.error(f"Failed to insert price data after reconnect: {e2}")
                 raise
     
-    def insert_corporate_actions(self, records: List[Dict], table: Optional[str] = None):
+    def insert_corporate_actions(self, records: List[Dict], table: str):
         """
         Insert corporate actions (dividends/splits).
 
@@ -773,14 +768,11 @@ class QuestDBClient:
         single point every writer passes through rather than in each caller.
         A dividend with no date is not a dividend — dropping it loses nothing.
 
-        `table` defaults to the legacy EODHD actions table; the yfinance collector
-        passes the fresh corporate_actions table so post-cutover actions do not mix
-        with EODHD's.
+        `table` is required so every caller declares its intended action store.
         """
         if not records:
             return
 
-        table = table or TABLE_CORPORATE_ACTIONS
         sql = f"""
         INSERT INTO {table}
         (symbol, action_type, action_date, dividend_amount, dividend_currency,

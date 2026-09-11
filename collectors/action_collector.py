@@ -13,6 +13,7 @@ import logging
 
 from api.eodhd_client import EODHDClient
 from db.questdb_client import QuestDBClient
+from config.tables import TABLE_ACTIONS_LEGACY_EODHD
 
 logger = logging.getLogger(__name__)
 
@@ -102,7 +103,7 @@ class ActionCollector:
             })
         
         if records:
-            self.db_client.insert_corporate_actions(records)
+            self.db_client.insert_corporate_actions(records, table=TABLE_ACTIONS_LEGACY_EODHD)
             logger.info(f"Inserted {len(records)} dividend records for {symbol}")
         
         return len(records)
@@ -164,7 +165,7 @@ class ActionCollector:
             })
         
         if records:
-            self.db_client.insert_corporate_actions(records)
+            self.db_client.insert_corporate_actions(records, table=TABLE_ACTIONS_LEGACY_EODHD)
             logger.info(f"Inserted {len(records)} split records for {symbol}")
         
         return len(records)

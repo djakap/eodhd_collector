@@ -19,6 +19,7 @@ from threading import Lock
 from api.eodhd_client import EODHDClient
 from db.questdb_client import QuestDBClient
 from config.eodhd_config import INTRADAY_INTERVALS, EOD_PERIODS
+from config.tables import TABLE_PRICES_LEGACY_EODHD
 from utils.aggregate_4h import aggregate_4h_candles
 from utils.logger import setup_logging
 
@@ -99,7 +100,7 @@ def backfill_symbol(symbol: str) -> dict:
                     ))
 
                 if records:
-                    db.insert_price_data(records)
+                    db.insert_price_data(records, table=TABLE_PRICES_LEGACY_EODHD)
                     stats['eod'] += len(records)
 
             except Exception as e:
@@ -141,7 +142,7 @@ def backfill_symbol(symbol: str) -> dict:
                     ))
 
                 if records:
-                    db.insert_price_data(records)
+                    db.insert_price_data(records, table=TABLE_PRICES_LEGACY_EODHD)
                     stats['intraday'] += len(records)
 
             except Exception as e:

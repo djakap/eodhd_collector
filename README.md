@@ -81,13 +81,16 @@ python main.py --stocks ../questDBDocker/config/syariah_stocks.txt
 
 ## Database Tables
 
-All tables use `eodhd_` prefix to avoid conflicts with existing tables:
+Production prices and retained EODHD data use explicit table authority:
 
-1. **eodhd_stock_data** - Price data (all intervals)
-2. **eodhd_fundamentals** - Fundamental metrics
-3. **eodhd_corporate_actions** - Dividends & splits
-4. **eodhd_calendar_events** - Upcoming events
-5. **eodhd_metadata** - Collection status
+1. **stock_data** - Production price data (all intervals)
+2. **eodhd_stock_data** - Frozen legacy EODHD prices (through 2026-07-23)
+3. **eodhd_fundamentals** - Fundamental metrics
+4. **corporate_actions** / **eodhd_corporate_actions** - Current and legacy
+   action stores; neither is complete relative to the other (see
+   `docs/TABLE_AUTHORITY.md`)
+5. **eodhd_calendar_events** - Upcoming events
+6. **eodhd_metadata** - Collection status
 
 ## Configuration
 

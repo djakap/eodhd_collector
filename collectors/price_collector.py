@@ -18,6 +18,7 @@ from db.questdb_client import QuestDBClient
 from utils.data_filter import filter_and_validate
 from utils.bar_rules import to_utc_naive, is_empty_bar
 from config.eodhd_config import INTRADAY_INTERVALS, EOD_PERIODS, INTRADAY_MAX_DAYS
+from config.tables import TABLE_PRICES_LEGACY_EODHD
 
 logger = logging.getLogger(__name__)
 
@@ -50,14 +51,18 @@ class PriceCollector:
             # Pre-load EOD periods
             for period in EOD_PERIODS:
                 key = f"{symbol}_{period}"
-                timestamps = self.db_client.get_existing_timestamps(symbol, period)
+                timestamps = self.db_client.get_existing_timestamps(
+                    symbol, period, table=TABLE_PRICES_LEGACY_EODHD
+                )
                 if timestamps:  # Only store if not empty
                     self.preloaded_timestamps[key] = timestamps
                     loaded += 1
             # Pre-load intraday intervals
             for interval in INTRADAY_INTERVALS:
                 key = f"{symbol}_{interval}"
-                timestamps = self.db_client.get_existing_timestamps(symbol, interval)
+                timestamps = self.db_client.get_existing_timestamps(
+                    symbol, interval, table=TABLE_PRICES_LEGACY_EODHD
+                )
                 if timestamps:  # Only store if not empty
                     self.preloaded_timestamps[key] = timestamps
                     loaded += 1
@@ -119,7 +124,9 @@ class PriceCollector:
             if use_duplicate_detection:
                 # Use pre-loaded timestamps if available, otherwise query
                 key = f"{symbol}_{period}"
-                existing_timestamps = self.preloaded_timestamps.get(key) or self.db_client.get_existing_timestamps(symbol, period)
+                existing_timestamps = self.preloaded_timestamps.get(key) or self.db_client.get_existing_timestamps(
+                    symbol, period, table=TABLE_PRICES_LEGACY_EODHD
+                )
             
             # Pandas-based processing (10-50x faster than loops)
             try:
@@ -220,7 +227,7 @@ class PriceCollector:
                 logger.info(f"Skipped {skipped_nulls} NULL records for {symbol} ({period})")
             
             if records:
-                self.db_client.insert_price_data(records)
+                self.db_client.insert_price_data(records, table=TABLE_PRICES_LEGACY_EODHD)
                 total_records += len(records)
                 logger.info(f"Inserted {len(records)} EOD records for {symbol} (period={period})")
                 
@@ -291,7 +298,9 @@ class PriceCollector:
             if use_duplicate_detection:
                 # Use pre-loaded timestamps if available, otherwise query
                 key = f"{symbol}_{interval}"
-                existing_timestamps = self.preloaded_timestamps.get(key) or self.db_client.get_existing_timestamps(symbol, interval)
+                existing_timestamps = self.preloaded_timestamps.get(key) or self.db_client.get_existing_timestamps(
+                    symbol, interval, table=TABLE_PRICES_LEGACY_EODHD
+                )
             
             # Optimized processing: Try pandas first (most efficient), fallback to numpy, then loops
             try:
@@ -453,7 +462,7 @@ class PriceCollector:
                 logger.info(f"Skipped {skipped_nulls} NULL records for {symbol} ({interval})")
             
             if records:
-                self.db_client.insert_price_data(records)
+                self.db_client.insert_price_data(records, table=TABLE_PRICES_LEGACY_EODHD)
                 total_records += len(records)
                 logger.info(f"Inserted {len(records)} intraday records for {symbol} (interval={interval})")
                 

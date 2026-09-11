@@ -30,6 +30,7 @@ import pandas as pd
 
 from api.eodhd_client import EODHDClient
 from db.questdb_client import QuestDBClient
+from config.tables import TABLE_PRICES_LEGACY_EODHD
 from utils.logger import setup_logging
 
 # ── Window 1: December 2024 (partition was dropped to remove duplicates) ────
@@ -111,7 +112,7 @@ def chunked_insert(db: QuestDBClient, records: list) -> None:
     """Insert records in small batches with brief pauses to avoid OOM."""
     for start in range(0, len(records), CHUNK):
         chunk = records[start:start + CHUNK]
-        db.insert_price_data(chunk)
+        db.insert_price_data(chunk, table=TABLE_PRICES_LEGACY_EODHD)
         if start + CHUNK < len(records):
             time.sleep(0.3)
 

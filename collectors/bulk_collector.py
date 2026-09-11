@@ -21,6 +21,7 @@ import logging
 from api.eodhd_client import EODHDClient
 from db.questdb_client import QuestDBClient
 from config.eodhd_config import EXCHANGE_CODE
+from config.tables import TABLE_ACTIONS_LEGACY_EODHD, TABLE_PRICES_LEGACY_EODHD
 
 logger = logging.getLogger(__name__)
 
@@ -93,7 +94,7 @@ class BulkCollector:
             ))
 
         if records:
-            self.db_client.insert_price_data(records)
+            self.db_client.insert_price_data(records, table=TABLE_PRICES_LEGACY_EODHD)
         logger.info(f"Bulk EOD: {len(records)} daily bars for {self.exchange}")
         return len(records)
 
@@ -128,7 +129,7 @@ class BulkCollector:
             })
 
         if records:
-            self.db_client.insert_corporate_actions(records)
+            self.db_client.insert_corporate_actions(records, table=TABLE_ACTIONS_LEGACY_EODHD)
         logger.info(f"Bulk dividends: {len(records)} records for {self.exchange}")
         return len(records)
 
@@ -168,7 +169,7 @@ class BulkCollector:
             })
 
         if records:
-            self.db_client.insert_corporate_actions(records)
+            self.db_client.insert_corporate_actions(records, table=TABLE_ACTIONS_LEGACY_EODHD)
         logger.info(f"Bulk splits: {len(records)} records for {self.exchange}")
         return len(records)
 

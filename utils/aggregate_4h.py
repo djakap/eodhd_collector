@@ -27,7 +27,8 @@ import time
 from datetime import datetime
 from typing import Optional
 
-from config.db_config import PG_CONNECTION_STRING, TABLE_STOCK_DATA
+from config.db_config import PG_CONNECTION_STRING
+from config.tables import TABLE_PRICES_LEGACY_EODHD
 
 logger = logging.getLogger(__name__)
 
@@ -103,7 +104,7 @@ def aggregate_4h_candles(
             '4h' as interval,
             0 as gmtoffset,
             'aggregated' as source
-        FROM {TABLE_STOCK_DATA}
+        FROM {TABLE_PRICES_LEGACY_EODHD}
         WHERE {where}
         GROUP BY symbol, 
             CASE 
@@ -147,10 +148,10 @@ def aggregate_4h_candles(
     
     # Insert in batches using INSERT ... SELECT for efficiency
     # Since dedup is enabled, duplicates will be automatically resolved
-    logger.info(f"Inserting {total_candles:,} 4h candles into {TABLE_STOCK_DATA}...")
+    logger.info(f"Inserting {total_candles:,} 4h candles into {TABLE_PRICES_LEGACY_EODHD}...")
     
     insert_query = f"""
-        INSERT INTO {TABLE_STOCK_DATA} 
+        INSERT INTO {TABLE_PRICES_LEGACY_EODHD}
             (symbol, interval, timestamp, open, high, low, close, adjusted_close, volume, gmtoffset, source, created_at)
         SELECT 
             symbol,
@@ -170,7 +171,7 @@ def aggregate_4h_candles(
             0 as gmtoffset,
             'aggregated' as source,
             now() as created_at
-        FROM {TABLE_STOCK_DATA}
+        FROM {TABLE_PRICES_LEGACY_EODHD}
         WHERE {where}
         GROUP BY symbol, 
             CASE 
@@ -212,7 +213,7 @@ def validate_4h_candles(symbol: str = "ASII.JK", days: int = 5) -> None:
     # Get 1h source candles (only trading hours)
     cur.execute(f"""
         SELECT timestamp, open, high, low, close, volume
-        FROM {TABLE_STOCK_DATA}
+        FROM {TABLE_PRICES_LEGACY_EODHD}
         WHERE symbol = '{symbol}' 
           AND interval = '1h' 
           AND hour(timestamp) IN (2, 3, 4, 6, 7, 8, 9)
@@ -224,7 +225,7 @@ def validate_4h_candles(symbol: str = "ASII.JK", days: int = 5) -> None:
     # Get 4h candles
     cur.execute(f"""
         SELECT timestamp, open, high, low, close, volume
-        FROM {TABLE_STOCK_DATA}
+        FROM {TABLE_PRICES_LEGACY_EODHD}
         WHERE symbol = '{symbol}' 
           AND interval = '4h' 
           AND timestamp > dateadd('d', -{days}, now())

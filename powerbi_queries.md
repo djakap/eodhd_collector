@@ -1,5 +1,17 @@
 # Power BI Connection Guide for EODHD QuestDB
 
+## Table authority (measured 2026-09-11)
+
+The query bodies below are preserved as legacy-report examples; they are not
+silently repointed by QCF-001. Price examples 1, 2 and 5, the ODBC example, and
+the Python bridge target `eodhd_stock_data`, the frozen legacy EODHD price table
+(last timestamp 2026-07-23). The production price table is `stock_data`.
+
+Corporate-action examples target `eodhd_corporate_actions`, the legacy action
+store. The active writer uses `corporate_actions`, but neither action table is a
+superset of the other; QCF-013 owns reconciliation. Metadata examples target
+`eodhd_metadata`. See `docs/TABLE_AUTHORITY.md` for the measured relationship.
+
 ## Issue: PostgreSQL Connector Doesn't Work
 Power BI's native PostgreSQL connector queries system tables (pg_enum, pg_catalog) that don't exist in QuestDB.
 

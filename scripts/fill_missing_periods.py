@@ -37,9 +37,10 @@ import psycopg2
 from dotenv import load_dotenv
 
 from config.db_config import (
-    TABLE_STOCK_DATA, QUESTDB_HOST, QUESTDB_PG_PORT,
+    QUESTDB_HOST, QUESTDB_PG_PORT,
     QUESTDB_USER, QUESTDB_PASSWORD, QUESTDB_DATABASE,
 )
+from config.tables import TABLE_PRICES_LEGACY_EODHD
 from utils.bar_rules import SENTINEL_MIN
 
 load_dotenv()
@@ -73,7 +74,7 @@ def filled_periods(cur, interval):
     labels. A date-based check sees the second as missing and adds it beside the
     first.
     """
-    cur.execute(f"""SELECT symbol, timestamp FROM "{TABLE_STOCK_DATA}"
+    cur.execute(f"""SELECT symbol, timestamp FROM "{TABLE_PRICES_LEGACY_EODHD}"
                     WHERE interval = %s""", (interval,))
     return {(s, period_of(interval, t)) for s, t in cur.fetchall()}
 
@@ -81,7 +82,7 @@ def filled_periods(cur, interval):
 def daily_range(cur, symbol, start, days):
     """High/low of the daily bars covering this period — the referee."""
     end = start + timedelta(days=days)
-    cur.execute(f"""SELECT min(low), max(high) FROM "{TABLE_STOCK_DATA}"
+    cur.execute(f"""SELECT min(low), max(high) FROM "{TABLE_PRICES_LEGACY_EODHD}"
                     WHERE symbol=%s AND interval='d' AND timestamp >= %s
                     AND timestamp < %s AND close IS NOT NULL
                     AND close < {SENTINEL_MIN}""",
@@ -182,11 +183,11 @@ def main():
     db.connect()
     try:
         for i in range(0, len(to_write), 5000):
-            db.insert_price_data(to_write[i:i + 5000])
+            db.insert_price_data(to_write[i:i + 5000], table=TABLE_PRICES_LEGACY_EODHD)
     finally:
         db.close()
     time.sleep(5)
-    print(f"\n{len(to_write):,} baris ditulis ke {TABLE_STOCK_DATA}.")
+    print(f"\n{len(to_write):,} baris ditulis ke {TABLE_PRICES_LEGACY_EODHD}.")
 
 
 if __name__ == "__main__":

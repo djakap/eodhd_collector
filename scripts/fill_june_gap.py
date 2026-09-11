@@ -37,10 +37,10 @@ import psycopg2
 from dotenv import load_dotenv
 
 from config.db_config import (
-    TABLE_STOCK_DATA, QUESTDB_HOST, QUESTDB_PG_PORT,
+    QUESTDB_HOST, QUESTDB_PG_PORT,
     QUESTDB_USER, QUESTDB_PASSWORD, QUESTDB_DATABASE,
 )
-from config.yfinance_config import TABLE_YF_STOCK_DATA
+from config.tables import TABLE_PRICES_LEGACY_EODHD, TABLE_PRICES_PRODUCTION
 from utils.bar_rules import SENTINEL_MIN
 
 load_dotenv()
@@ -72,13 +72,13 @@ def main():
     conn.autocommit = True
     cur = conn.cursor()
 
-    cur.execute(f"""SELECT symbol, timestamp, close FROM "{TABLE_YF_STOCK_DATA}"
+    cur.execute(f"""SELECT symbol, timestamp, close FROM "{TABLE_PRICES_PRODUCTION}"
                     WHERE interval='d' AND timestamp >= %s AND timestamp < %s
                     AND close IS NOT NULL""", (START, END))
     ref = {(s, str(t)[:10]): float(c) for s, t, c in cur.fetchall()}
     print(f"Pembanding dari yfinance: {len(ref):,} bar\n")
 
-    cur.execute(f"""SELECT count() FROM "{TABLE_STOCK_DATA}" WHERE interval='d'
+    cur.execute(f"""SELECT count() FROM "{TABLE_PRICES_LEGACY_EODHD}" WHERE interval='d'
                     AND timestamp >= %s AND timestamp < %s""", (START, END))
     print(f"Sudah ada di produksi untuk rentang ini: {cur.fetchone()[0]:,} baris\n")
 
@@ -155,7 +155,7 @@ def main():
     db.connect()
     try:
         for i in range(0, len(to_write), 5000):
-            db.insert_price_data(to_write[i:i + 5000])
+            db.insert_price_data(to_write[i:i + 5000], table=TABLE_PRICES_LEGACY_EODHD)
     finally:
         db.close()
     # Reconnect before the final count. The original connection has been idle
@@ -168,7 +168,7 @@ def main():
                              user=QUESTDB_USER, password=QUESTDB_PASSWORD,
                              database=QUESTDB_DATABASE)
     c2 = conn2.cursor()
-    c2.execute(f"""SELECT count() FROM "{TABLE_STOCK_DATA}" WHERE interval='d'
+    c2.execute(f"""SELECT count() FROM "{TABLE_PRICES_LEGACY_EODHD}" WHERE interval='d'
                    AND timestamp >= %s AND timestamp < %s""", (START, END))
     print(f"\nProduksi sekarang punya {c2.fetchone()[0]:,} baris di rentang itu.")
     conn2.close()

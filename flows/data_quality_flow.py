@@ -22,7 +22,6 @@ from prefect import flow, task, get_run_logger
 
 from db.questdb_client import QuestDBClient
 from config.db_config import (
-    TABLE_STOCK_DATA,
     TABLE_STOCK_METADATA,
     QUESTDB_HOST,
     QUESTDB_PG_PORT,
@@ -30,6 +29,7 @@ from config.db_config import (
     QUESTDB_PASSWORD,
     QUESTDB_DATABASE,
 )
+from config.tables import TABLE_PRICES_LEGACY_EODHD
 
 logger = logging.getLogger(__name__)
 
@@ -149,7 +149,7 @@ def validate_ohlc_data(lookback_days: int = 7, spike_threshold: float = 0.5) -> 
         # 1. Inverted high/low
         cur.execute(f"""
             SELECT symbol, interval, timestamp, open, high, low, close, volume
-            FROM {TABLE_STOCK_DATA}
+            FROM {TABLE_PRICES_LEGACY_EODHD}
             WHERE timestamp >= '{since}'
               AND interval = 'd'
               AND high < low
@@ -161,7 +161,7 @@ def validate_ohlc_data(lookback_days: int = 7, spike_threshold: float = 0.5) -> 
         # 2. Open/close outside high-low range
         cur.execute(f"""
             SELECT symbol, interval, timestamp, open, high, low, close
-            FROM {TABLE_STOCK_DATA}
+            FROM {TABLE_PRICES_LEGACY_EODHD}
             WHERE timestamp >= '{since}'
               AND interval = 'd'
               AND (open > high OR open < low OR close > high OR close < low)
@@ -174,7 +174,7 @@ def validate_ohlc_data(lookback_days: int = 7, spike_threshold: float = 0.5) -> 
         # 3. Zero or negative prices (EOD only)
         cur.execute(f"""
             SELECT symbol, interval, timestamp, open, high, low, close
-            FROM {TABLE_STOCK_DATA}
+            FROM {TABLE_PRICES_LEGACY_EODHD}
             WHERE timestamp >= '{since}'
               AND interval = 'd'
               AND (open <= 0 OR high <= 0 OR low <= 0 OR close <= 0)
@@ -185,7 +185,7 @@ def validate_ohlc_data(lookback_days: int = 7, spike_threshold: float = 0.5) -> 
 
         # 4. Zero volume on EOD rows (suspicious for active stocks)
         cur.execute(f"""
-            SELECT count() FROM {TABLE_STOCK_DATA}
+            SELECT count() FROM {TABLE_PRICES_LEGACY_EODHD}
             WHERE timestamp >= '{since}'
               AND interval = 'd'
               AND volume = 0
@@ -196,7 +196,7 @@ def validate_ohlc_data(lookback_days: int = 7, spike_threshold: float = 0.5) -> 
         # Use a self-join approach via Python — fetch last 2 rows per symbol
         cur.execute(f"""
             SELECT symbol, timestamp, close
-            FROM {TABLE_STOCK_DATA}
+            FROM {TABLE_PRICES_LEGACY_EODHD}
             WHERE timestamp >= '{since}'
               AND interval = 'd'
               AND close > 0
@@ -363,7 +363,7 @@ def monitor_questdb_partitions(warn_partition_mb: int = 200) -> Dict:
         # Main data table partitions
         cur.execute(f"""
             SELECT name, numRows, diskSize
-            FROM table_partitions('{TABLE_STOCK_DATA}')
+            FROM table_partitions('{TABLE_PRICES_LEGACY_EODHD}')
             ORDER BY name
         """)
         partitions = cur.fetchall()

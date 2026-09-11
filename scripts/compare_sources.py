@@ -58,10 +58,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import psycopg2
 
 from config.db_config import (
-    TABLE_STOCK_DATA, QUESTDB_HOST, QUESTDB_PG_PORT,
+    QUESTDB_HOST, QUESTDB_PG_PORT,
     QUESTDB_USER, QUESTDB_PASSWORD, QUESTDB_DATABASE,
 )
-from config.yfinance_config import TABLE_YF_STOCK_DATA
+from config.tables import TABLE_PRICES_LEGACY_EODHD, TABLE_PRICES_PRODUCTION
 
 logging.basicConfig(level=logging.INFO, format='%(levelname)-8s %(message)s')
 logger = logging.getLogger(__name__)
@@ -174,8 +174,8 @@ def compare(interval: str, days: int, symbols, include_all: bool,
 
     conn = connect()
     cur = conn.cursor()
-    eodhd = fetch(cur, TABLE_STOCK_DATA, interval, since, symbols, include_all, cutoff)
-    yfin = fetch(cur, TABLE_YF_STOCK_DATA, interval, since, symbols, include_all, cutoff)
+    eodhd = fetch(cur, TABLE_PRICES_LEGACY_EODHD, interval, since, symbols, include_all, cutoff)
+    yfin = fetch(cur, TABLE_PRICES_PRODUCTION, interval, since, symbols, include_all, cutoff)
     conn.close()
 
     # Placeholder rows are absence of data; comparing them as "EODHD-only bars"

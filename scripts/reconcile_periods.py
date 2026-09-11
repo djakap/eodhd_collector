@@ -44,9 +44,10 @@ import psycopg2
 from dotenv import load_dotenv
 
 from config.db_config import (
-    TABLE_STOCK_DATA, QUESTDB_HOST, QUESTDB_PG_PORT,
+    QUESTDB_HOST, QUESTDB_PG_PORT,
     QUESTDB_USER, QUESTDB_PASSWORD, QUESTDB_DATABASE,
 )
+from config.tables import TABLE_PRICES_LEGACY_EODHD
 
 load_dotenv()
 
@@ -212,7 +213,7 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--stocks-file', default='config/syariah_stocks.txt')
     p.add_argument('--limit', type=int)
-    p.add_argument('--table', default=TABLE_STOCK_DATA)
+    p.add_argument('--table', default=TABLE_PRICES_LEGACY_EODHD)
     p.add_argument('--out', default='reports/period_reconciliation.json')
     args = p.parse_args()
 

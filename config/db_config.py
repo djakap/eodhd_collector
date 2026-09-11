@@ -20,10 +20,8 @@ QUESTDB_DATABASE = os.getenv('QUESTDB_DATABASE', 'qdb')
 HTTP_URL = f"http://{QUESTDB_HOST}:{QUESTDB_HTTP_PORT}"
 PG_CONNECTION_STRING = f"postgresql://{QUESTDB_USER}:{QUESTDB_PASSWORD}@{QUESTDB_HOST}:{QUESTDB_PG_PORT}/{QUESTDB_DATABASE}"
 
-# Table names (prefixed with 'eodhd_' to avoid conflicts)
-TABLE_STOCK_DATA = 'eodhd_stock_data'
+# Source-specific EODHD table names
 TABLE_FUNDAMENTALS = 'eodhd_fundamentals'
-TABLE_CORPORATE_ACTIONS = 'eodhd_corporate_actions'
 TABLE_CALENDAR_EVENTS = 'eodhd_calendar_events'
 TABLE_METADATA = 'eodhd_metadata'
 TABLE_STOCK_METADATA = 'eodhd_stock_metadata'  # For update mode tracking

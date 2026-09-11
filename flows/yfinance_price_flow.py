@@ -1,23 +1,21 @@
 """
-Prefect Flow: yfinance price collection (parallel-run phase)
+Prefect Flow: production yfinance price collection
 
-Writes OHLCV into yf_stock_data — a shadow of eodhd_stock_data — so both sources
-can be compared bar for bar before EODHD is retired. Writing them into one table
-would not work: it dedups on (timestamp, symbol, interval), so whichever source
-ran last would be the only one left.
+Writes OHLCV into stock_data, the source-neutral production price table.
+eodhd_stock_data is the frozen legacy EODHD table retained for reconciliation
+and historical coverage.
 
 Two entry points:
 
   backfill_flow  — one-off, fetches everything yfinance will give (decades of
-                   d/w/m, ~730 days of 1h). Run once to seed the shadow table.
+                   d/w/m, ~730 days of 1h). Run once to seed the target table.
 
   update_flow    — daily incremental, re-fetching a short window so late
-                   corrections are picked up. This is what runs alongside the
-                   EODHD deployments during the parallel period.
+                   corrections are picked up. This is the active production
+                   price update.
 
-Corporate actions are deliberately not collected here: there is no shadow table
-for them, so writing would overwrite EODHD's dividend values. The collector skips
-them automatically while shadowing.
+The separate actions_flow writes current yfinance actions to corporate_actions.
+Price runs skip actions by default.
 """
 
 import sys

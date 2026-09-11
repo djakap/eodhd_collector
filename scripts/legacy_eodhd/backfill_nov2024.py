@@ -23,6 +23,7 @@ import pandas as pd
 
 from api.eodhd_client import EODHDClient
 from db.questdb_client import QuestDBClient
+from config.tables import TABLE_PRICES_LEGACY_EODHD
 from utils.logger import setup_logging
 
 # ── Target window ────────────────────────────────────────────────────────────
@@ -121,7 +122,7 @@ def backfill_symbol(symbol: str, api: EODHDClient, db: QuestDBClient,
                 data = api.get_eod_data(symbol, period, from_date=EOD_FROM, to_date=EOD_TO)
                 records = to_eod_records(data or [], symbol, period)
                 if records and not dry_run:
-                    db.insert_price_data(records)
+                    db.insert_price_data(records, table=TABLE_PRICES_LEGACY_EODHD)
                 inserted += len(records)
                 if records:
                     logger.debug(f"  {symbol} {period}: {len(records)} rows")
@@ -144,7 +145,7 @@ def backfill_symbol(symbol: str, api: EODHDClient, db: QuestDBClient,
                 # overwhelming QuestDB with partition writes across 20 daily partitions
                 for start in range(0, len(records), CHUNK):
                     chunk = records[start:start + CHUNK]
-                    db.insert_price_data(chunk)
+                    db.insert_price_data(chunk, table=TABLE_PRICES_LEGACY_EODHD)
                     if start + CHUNK < len(records):
                         time.sleep(0.5)
             inserted += len(records)
