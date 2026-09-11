@@ -1,0 +1,1 @@
+{'symbol': 'BANK.JK', 'price_stats': {'eod_records': 0, 'intraday_records': 0, 'total_records': 0}, 'action_stats': None, 'success': True, 'error': None}

@@ -1,0 +1,3 @@
+{'symbol': 'BANK.JK', 'price_stats': {'eod_records': 1539, 'intraday_records': 0, 'total_records': 1539}, 'action_stats': {'symbol': 'BANK.JK', 'dividends': 0, 'splits': 0, 'total': 0, 'success': True, 'error': None}, 'success': True, 'error': None}
+{'symbol': 'BRIS.JK', 'price_stats': {'eod_records': 2404, 'intraday_records': 0, 'total_records': 2404}, 'action_stats': {'symbol': 'BRIS.JK', 'dividends': 5, 'splits': 0, 'total': 5, 'success': True, 'error': None}, 'success': True, 'error': None}
+{'symbol': 'BTPS.JK', 'price_stats': {'eod_records': 2405, 'intraday_records': 0, 'total_records': 2405}, 'action_stats': {'symbol': 'BTPS.JK', 'dividends': 7, 'splits': 0, 'total': 7, 'success': True, 'error': None}, 'success': True, 'error': None}
