@@ -26,6 +26,7 @@ from prefect import flow, task, get_run_logger
 
 from api.yfinance_client import YFinanceClient, RateLimitedError
 from db.yfinance_writer import YFinanceWriter
+from config.universe import load_universe
 from config.yfinance_config import YF_CIRCUIT_BREAKER
 
 logger = logging.getLogger(__name__)
@@ -38,13 +39,7 @@ def load_symbols(stocks_file: str, limit: Optional[int] = None) -> List[str]:
     config/syariah_stocks.txt stores bare codes ('BANK'), while Yahoo and the
     metadata table both use the suffixed form ('BANK.JK').
     """
-    path = stocks_file
-    if not os.path.isabs(path):
-        path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), path)
-
-    with open(path) as f:
-        raw = [line.strip() for line in f if line.strip() and not line.startswith('#')]
-
+    raw = load_universe(stocks_file)
     symbols = [s if s.endswith('.JK') else f"{s}.JK" for s in raw]
     return symbols[:limit] if limit else symbols
 

@@ -1,0 +1,10 @@
+{
+  "universe_id": "idx-syariah",
+  "as_of": "2026-09-12",
+  "source": "config/syariah_stocks.txt",
+  "format": "bare IDX codes, one per line, LF, trailing newline; .JK appended by consumers",
+  "symbol_count": 651,
+  "sha256_lf": "6e69606cc1ac5f9b397fa2b46d12503925098ea4990273b386a9f6ee7f2619b9",
+  "authority": "djakap/eodhd_collector",
+  "history": "Membership is asserted as of as_of only. No point-in-time history exists and none was reconstructed."
+}
