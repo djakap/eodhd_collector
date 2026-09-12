@@ -8,5 +8,7 @@ reconciliation question for QCF-013.
 
 TABLE_PRICES_PRODUCTION = 'stock_data'
 TABLE_PRICES_LEGACY_EODHD = 'eodhd_stock_data'
+TABLE_PRICE_METADATA_PRODUCTION = 'stock_metadata'
+TABLE_PRICE_METADATA_LEGACY_EODHD = 'eodhd_stock_metadata'
 TABLE_ACTIONS_PRODUCTION = 'corporate_actions'
 TABLE_ACTIONS_LEGACY_EODHD = 'eodhd_corporate_actions'

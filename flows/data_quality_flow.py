@@ -22,14 +22,16 @@ from prefect import flow, task, get_run_logger
 
 from db.questdb_client import QuestDBClient
 from config.db_config import (
-    TABLE_STOCK_METADATA,
     QUESTDB_HOST,
     QUESTDB_PG_PORT,
     QUESTDB_USER,
     QUESTDB_PASSWORD,
     QUESTDB_DATABASE,
 )
-from config.tables import TABLE_PRICES_LEGACY_EODHD
+from config.tables import (
+    TABLE_PRICE_METADATA_LEGACY_EODHD,
+    TABLE_PRICES_LEGACY_EODHD,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -56,12 +58,12 @@ def cleanup_metadata_duplicates() -> Dict:
     cur = conn.cursor()
 
     try:
-        cur.execute(f"SELECT count() FROM {TABLE_STOCK_METADATA}")
+        cur.execute(f"SELECT count() FROM {TABLE_PRICE_METADATA_LEGACY_EODHD}")
         total_before = cur.fetchone()[0]
 
         cur.execute(
             f"SELECT count() FROM "
-            f"(SELECT symbol, interval FROM {TABLE_STOCK_METADATA} GROUP BY symbol, interval)"
+            f"(SELECT symbol, interval FROM {TABLE_PRICE_METADATA_LEGACY_EODHD} GROUP BY symbol, interval)"
         )
         unique_count = cur.fetchone()[0]
         dup_count = total_before - unique_count
@@ -75,7 +77,7 @@ def cleanup_metadata_duplicates() -> Dict:
         # Step 1: fetch latest row per (symbol, interval) from current table
         cur.execute(f"""
             SELECT symbol, interval, last_updated, total_records, data_start, data_end, created_at
-            FROM {TABLE_STOCK_METADATA}
+            FROM {TABLE_PRICE_METADATA_LEGACY_EODHD}
             ORDER BY symbol, interval, last_updated DESC
         """)
         rows = cur.fetchall()
@@ -92,18 +94,18 @@ def cleanup_metadata_duplicates() -> Dict:
         log.info(f"Fetched {len(dedup_rows)} unique rows — will rebuild table")
 
         # Step 2: drop all partitions to truncate the table
-        cur.execute(f"SELECT name FROM table_partitions('{TABLE_STOCK_METADATA}') ORDER BY name")
+        cur.execute(f"SELECT name FROM table_partitions('{TABLE_PRICE_METADATA_LEGACY_EODHD}') ORDER BY name")
         partitions = [r[0] for r in cur.fetchall()]
 
         if partitions:
             partition_list = ", ".join(f"'{p}'" for p in partitions)
-            cur.execute(f"ALTER TABLE {TABLE_STOCK_METADATA} DROP PARTITION LIST {partition_list}")
+            cur.execute(f"ALTER TABLE {TABLE_PRICE_METADATA_LEGACY_EODHD} DROP PARTITION LIST {partition_list}")
             log.info(f"Dropped {len(partitions)} partitions")
 
         # Step 3: re-insert deduplicated rows
         now = datetime.now()
         insert_sql = f"""
-            INSERT INTO {TABLE_STOCK_METADATA}
+            INSERT INTO {TABLE_PRICE_METADATA_LEGACY_EODHD}
             (symbol, interval, last_updated, total_records, data_start, data_end, created_at)
             VALUES (%s, %s, %s, %s, %s, %s, %s)
         """
@@ -289,7 +291,7 @@ def detect_new_exchange_symbols(stocks_file: str = "config/syariah_stocks.txt") 
     cur = conn.cursor()
     try:
         cur.execute(f"""
-            SELECT symbol FROM {TABLE_STOCK_METADATA}
+            SELECT symbol FROM {TABLE_PRICE_METADATA_LEGACY_EODHD}
             WHERE interval = 'd'
             ORDER BY symbol
         """)
@@ -396,7 +398,7 @@ def monitor_questdb_partitions(warn_partition_mb: int = 200) -> Dict:
 
         # Metadata table
         cur.execute(f"""
-            SELECT count() FROM {TABLE_STOCK_METADATA}
+            SELECT count() FROM {TABLE_PRICE_METADATA_LEGACY_EODHD}
         """)
         meta_rows = cur.fetchone()[0]
 

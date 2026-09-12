@@ -234,15 +234,28 @@ CREATE TABLE eodhd_metadata (
 -- QuestDB automatically indexes SYMBOL columns
 
 -- ============================================================================
--- 6. STOCK METADATA TABLE (for update mode tracking)
+-- 6. PRODUCTION STOCK METADATA (truthful stored coverage)
+-- ============================================================================
+CREATE TABLE stock_metadata (
+    symbol SYMBOL,
+    interval SYMBOL,            -- Price interval described by this row
+    last_updated TIMESTAMP,     -- When coverage was last measured and written
+    total_records LONG,         -- Total rows currently stored for symbol/interval
+    data_start TIMESTAMP,       -- Earliest timestamp currently stored
+    data_end TIMESTAMP,         -- Latest timestamp currently stored
+    created_at TIMESTAMP        -- When this metadata row was created
+) timestamp(last_updated) PARTITION BY DAY WAL;
+
+-- ============================================================================
+-- 7. FROZEN LEGACY EODHD STOCK METADATA (historical batch values)
 -- ============================================================================
 CREATE TABLE eodhd_stock_metadata (
     symbol SYMBOL,
     interval SYMBOL,            -- 'd', 'w', 'm', '5m', '15m', '30m', '1h'
     last_updated TIMESTAMP,     -- When this stock/interval was last collected
-    total_records LONG,         -- Total records for this stock/interval
-    data_start TIMESTAMP,       -- Earliest timestamp in database
-    data_end TIMESTAMP,         -- Latest timestamp in database (for update filtering)
+    total_records LONG,         -- Rows in the most recent legacy collection batch
+    data_start TIMESTAMP,       -- Earliest timestamp in that legacy batch
+    data_end TIMESTAMP,         -- Latest timestamp in that legacy batch
     created_at TIMESTAMP        -- When first created
 ) timestamp(last_updated) PARTITION BY DAY WAL;
 

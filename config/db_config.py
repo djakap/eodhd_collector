@@ -24,7 +24,6 @@ PG_CONNECTION_STRING = f"postgresql://{QUESTDB_USER}:{QUESTDB_PASSWORD}@{QUESTDB
 TABLE_FUNDAMENTALS = 'eodhd_fundamentals'
 TABLE_CALENDAR_EVENTS = 'eodhd_calendar_events'
 TABLE_METADATA = 'eodhd_metadata'
-TABLE_STOCK_METADATA = 'eodhd_stock_metadata'  # For update mode tracking
 
 # Batch insert settings (optimized for large datasets)
 BATCH_INSERT_SIZE = 2000  # Reduced to prevent QuestDB crashes

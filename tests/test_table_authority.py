@@ -32,6 +32,8 @@ def test_t0_authority_module_defines_exact_names_and_values():
     expected = {
         "TABLE_PRICES_PRODUCTION": "stock_data",
         "TABLE_PRICES_LEGACY_EODHD": "eodhd_stock_data",
+        "TABLE_PRICE_METADATA_PRODUCTION": "stock_metadata",
+        "TABLE_PRICE_METADATA_LEGACY_EODHD": "eodhd_stock_metadata",
         "TABLE_ACTIONS_PRODUCTION": "corporate_actions",
         "TABLE_ACTIONS_LEGACY_EODHD": "eodhd_corporate_actions",
     }
@@ -45,6 +47,10 @@ def test_t0_authority_module_defines_exact_names_and_values():
 
 def test_t1_production_and_legacy_pairs_are_distinct():
     assert tables.TABLE_PRICES_PRODUCTION != tables.TABLE_PRICES_LEGACY_EODHD
+    assert (
+        tables.TABLE_PRICE_METADATA_PRODUCTION
+        != tables.TABLE_PRICE_METADATA_LEGACY_EODHD
+    )
     assert tables.TABLE_ACTIONS_PRODUCTION != tables.TABLE_ACTIONS_LEGACY_EODHD
 
 
@@ -52,6 +58,7 @@ def test_t1_production_and_legacy_pairs_are_distinct():
     ("module_name", "removed_name"),
     [
         ("config.db_config", "TABLE_" + "STOCK_DATA"),
+        ("config.db_config", "TABLE_" + "STOCK_METADATA"),
         ("config.db_config", "TABLE_" + "CORPORATE_ACTIONS"),
         ("config.yfinance_config", "TABLE_YF_" + "STOCK_DATA"),
         ("config.yfinance_config", "TABLE_CORPORATE_" + "ACTIONS_YF"),
@@ -147,7 +154,7 @@ def _sample_price_record():
     }
 
 
-def test_t6_metadata_guard_structurally_compares_with_legacy_price_table():
+def test_t6_metadata_guard_structurally_compares_with_production_price_table():
     source = (ROOT / "collectors/yfinance_price_collector.py").read_text()
     tree = ast.parse(source)
     store = next(
@@ -161,7 +168,7 @@ def test_t6_metadata_guard_structurally_compares_with_legacy_price_table():
         and node.left.attr == "target_table"
         and any(
             isinstance(comparator, ast.Name)
-            and comparator.id == "TABLE_PRICES_LEGACY_EODHD"
+            and comparator.id == "TABLE_PRICES_PRODUCTION"
             for comparator in node.comparators
         )
         for node in comparisons
@@ -169,14 +176,18 @@ def test_t6_metadata_guard_structurally_compares_with_legacy_price_table():
     assert tables.TABLE_PRICES_LEGACY_EODHD != tables.TABLE_PRICES_PRODUCTION
 
 
-def test_t6_metadata_guard_stays_dead_for_production_and_live_for_legacy():
+def test_t6_metadata_guard_is_live_for_production_and_legacy():
     production = _collector_with_fake_db(tables.TABLE_PRICES_PRODUCTION)
     assert production._store("TEST.JK", "d", [_sample_price_record()]) == 1
-    assert production.db.metadata_writes == []
+    assert production.db.metadata_writes == [
+        (("TEST.JK", "d"), {"table": tables.TABLE_PRICES_PRODUCTION})
+    ]
 
     legacy = _collector_with_fake_db(tables.TABLE_PRICES_LEGACY_EODHD)
     assert legacy._store("TEST.JK", "d", [_sample_price_record()]) == 1
-    assert len(legacy.db.metadata_writes) == 1
+    assert legacy.db.metadata_writes == [
+        (("TEST.JK", "d"), {"table": tables.TABLE_PRICES_LEGACY_EODHD})
+    ]
 
 
 def test_t10_archive_is_byte_identical_and_retains_historical_names():
@@ -188,6 +199,10 @@ def test_t10_archive_is_byte_identical_and_retains_historical_names():
         cwd=ROOT,
         check=True,
     )
+    tree = _run("git", "rev-parse", f"HEAD:{archive}").strip()
+    base_tree = _run("git", "rev-parse", f"{BASE_COMMIT}:{archive}").strip()
+    assert tree == base_tree
+    assert tree.startswith("f8eb9a70")
     historical_name = "TABLE_" + "STOCK_DATA"
     references = 0
     for path in (ROOT / archive).rglob("*"):
@@ -222,4 +237,6 @@ def _direct_table_literals(ref=None):
 
 
 def test_t11_direct_config_table_literal_multiset_is_unchanged():
-    assert _direct_table_literals() == _direct_table_literals(BASE_COMMIT)
+    expected = _direct_table_literals(BASE_COMMIT)
+    expected.update([tables.TABLE_PRICE_METADATA_PRODUCTION])
+    assert _direct_table_literals() == expected

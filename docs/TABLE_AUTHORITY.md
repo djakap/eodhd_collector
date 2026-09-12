@@ -17,6 +17,11 @@ has been independently verified complete.
 frozen legacy/source-specific table retained for archive, reconciliation, and
 historical coverage.
 
+Price-coverage metadata follows the same authority split. Production coverage
+is stored in `stock_metadata`; `eodhd_stock_metadata` is frozen legacy evidence.
+Their grain and freshness semantics are defined in
+[`METADATA_SEMANTICS.md`](METADATA_SEMANTICS.md).
+
 ## Corporate-action tables
 
 | Operational role | Table | Rows | Symbols | First action | Last action |

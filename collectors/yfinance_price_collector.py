@@ -133,16 +133,23 @@ class YFinancePriceCollector:
 
         self.db.insert_price_data(rows, table=self.target_table)
 
-        # Keep production metadata writes unreachable until QCF-002 corrects
-        # total_records semantics. Comparing with the legacy table preserves the
-        # pre-QCF-001 behaviour deliberately.
-        if self.target_table == TABLE_PRICES_LEGACY_EODHD:
-            stamps = [r['timestamp'] for r in records]
-            self.db.upsert_stock_metadata(
-                symbol, interval,
-                data_start=min(stamps), data_end=max(stamps),
-                total_records=len(rows),
-            )
+        # Production coverage is persisted in stock_metadata. An explicit legacy
+        # target retains the matching eodhd_stock_metadata path for comparison runs.
+        metadata_price_table = None
+        if self.target_table == TABLE_PRICES_PRODUCTION:
+            metadata_price_table = TABLE_PRICES_PRODUCTION
+        elif self.target_table == TABLE_PRICES_LEGACY_EODHD:
+            metadata_price_table = TABLE_PRICES_LEGACY_EODHD
+
+        if metadata_price_table:
+            try:
+                self.db.upsert_stock_metadata(
+                    symbol, interval, table=metadata_price_table
+                )
+            except Exception as exc:
+                logger.warning(
+                    f"Could not persist metadata for {symbol}/{interval}: {exc}"
+                )
         return len(rows)
 
     # -- collection ---------------------------------------------------------

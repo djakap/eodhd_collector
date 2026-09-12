@@ -138,9 +138,9 @@ Check logs at: `logs/eodhd_collector.log`
 
 Query collection status:
 ```sql
-SELECT symbol, last_price_update, total_price_records 
-FROM eodhd_metadata 
-ORDER BY symbol;
+SELECT symbol, interval, last_updated, total_records, data_start, data_end
+FROM stock_metadata
+ORDER BY symbol, interval, last_updated DESC;
 ```
 
 ## Support

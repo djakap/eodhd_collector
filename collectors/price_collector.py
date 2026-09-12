@@ -233,10 +233,7 @@ class PriceCollector:
                 
                 # Update metadata for tracking
                 self.db_client.upsert_stock_metadata(
-                    symbol, period,
-                    data_start=min(timestamps),
-                    data_end=max(timestamps),
-                    total_records=len(records)
+                    symbol, period, table=TABLE_PRICES_LEGACY_EODHD
                 )
         
         return total_records
@@ -468,10 +465,7 @@ class PriceCollector:
                 
                 # Update metadata for tracking
                 self.db_client.upsert_stock_metadata(
-                    symbol, interval,
-                    data_start=min(timestamps),
-                    data_end=max(timestamps),
-                    total_records=len(records)
+                    symbol, interval, table=TABLE_PRICES_LEGACY_EODHD
                 )
         
         return total_records
@@ -512,8 +506,7 @@ class PriceCollector:
             
             # Update metadata
             self.db_client.insert_or_update_metadata(symbol, {
-                'last_price_update': datetime.now(),
-                'total_price_records': stats['total_records']
+                'last_price_update': datetime.now()
             })
             
             logger.info(f"✅ Completed {symbol}: {stats['total_records']} total records")

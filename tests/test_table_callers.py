@@ -36,6 +36,19 @@ def _table_expressions(path, method_name):
     return expressions
 
 
+def _assigned_string(path, name):
+    tree = ast.parse(_source(path), filename=path)
+    for node in tree.body:
+        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+            continue
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        if not any(isinstance(target, ast.Name) and target.id == name for target in targets):
+            continue
+        if isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+            return node.value.value
+    raise AssertionError(f"{name} is not a direct string assignment in {path}")
+
+
 def test_t5_every_legacy_caller_preserves_its_table_mapping():
     expected = {
         "collectors/bulk_collector.py": {
@@ -95,14 +108,12 @@ def test_t5_production_callers_and_migrations_preserve_their_targets():
     assert _table_expressions("flows/intraday_flow.py", "insert_price_data") == ["PROD"]
 
     migration_targets = {
-        "scripts.promote_to_production": "stock_data",
-        "scripts.dedup_periods": "eodhd_stock_data_dd",
-        "scripts.rebuild_stock_data": "eodhd_stock_data_v2",
+        "scripts/promote_to_production.py": "stock_data",
+        "scripts/dedup_periods.py": "eodhd_stock_data_dd",
+        "scripts/rebuild_stock_data.py": "eodhd_stock_data_v2",
     }
-    for module_name, expected in migration_targets.items():
-        module = importlib.import_module(module_name)
-        path = module_name.replace(".", "/") + ".py"
-        assert module.NEW == expected
+    for path, expected in migration_targets.items():
+        assert _assigned_string(path, "NEW") == expected
         assert _table_expressions(path, "insert_price_data") == ["NEW"]
 
 
@@ -127,9 +138,6 @@ def test_t7_all_touched_and_caller_modules_import_in_one_fresh_interpreter():
         "scripts.legacy_eodhd.backfill_gap",
         "scripts.legacy_eodhd.backfill_nov2024",
         "flows.intraday_flow",
-        "scripts.promote_to_production",
-        "scripts.dedup_periods",
-        "scripts.rebuild_stock_data",
         "flows.yfinance_price_flow",
     ]
     command = "import importlib; " + "; ".join(
@@ -142,6 +150,14 @@ def test_t7_all_touched_and_caller_modules_import_in_one_fresh_interpreter():
         capture_output=True,
     )
     assert result.returncode == 0, result.stdout + result.stderr
+    # These migration tools connect to QuestDB at import time. Parse them without
+    # executing module-level runtime code so this regression remains portable.
+    for path in (
+        "scripts/promote_to_production.py",
+        "scripts/dedup_periods.py",
+        "scripts/rebuild_stock_data.py",
+    ):
+        ast.parse(_source(path), filename=path)
 
 
 def _working_python_files():
@@ -179,6 +195,7 @@ def test_t8_no_insert_call_omits_a_table_argument():
 def test_t9_removed_names_are_absent_outside_the_frozen_archive():
     removed_names = [
         "TABLE_" + "STOCK_DATA",
+        "TABLE_" + "STOCK_METADATA",
         "TABLE_" + "CORPORATE_ACTIONS",
         "TABLE_YF_" + "STOCK_DATA",
         "TABLE_CORPORATE_" + "ACTIONS_YF",

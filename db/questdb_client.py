@@ -25,10 +25,15 @@ from config.db_config import (
     PG_CONNECTION_STRING,
     TABLE_CALENDAR_EVENTS,
     TABLE_METADATA,
-    TABLE_STOCK_METADATA,
     BATCH_INSERT_SIZE,
     QUESTDB_HOST,
     QUESTDB_INFLUX_PORT
+)
+from config.tables import (
+    TABLE_PRICE_METADATA_LEGACY_EODHD,
+    TABLE_PRICE_METADATA_PRODUCTION,
+    TABLE_PRICES_LEGACY_EODHD,
+    TABLE_PRICES_PRODUCTION,
 )
 from utils.bar_rules import describe_rejection
 
@@ -61,6 +66,19 @@ def _as_utc(value):
     return value
 
 logger = logging.getLogger(__name__)
+
+_PRICE_TO_METADATA_TABLE = {
+    TABLE_PRICES_PRODUCTION: TABLE_PRICE_METADATA_PRODUCTION,
+    TABLE_PRICES_LEGACY_EODHD: TABLE_PRICE_METADATA_LEGACY_EODHD,
+}
+
+
+def _metadata_table_for_price_table(table: str) -> str:
+    """Return the metadata table paired with a known price table."""
+    try:
+        return _PRICE_TO_METADATA_TABLE[table]
+    except KeyError as exc:
+        raise ValueError(f"No metadata table is defined for price table {table!r}") from exc
 
 # Corporate actions predate nothing on IDX before the mid-90s (oldest real action
 # on record: 1995-06-02), so the whole of 1970 can be treated as invalid. That
@@ -308,7 +326,7 @@ class QuestDBClient:
             # Get latest metadata record (in case of duplicates)
             self.cursor.execute(f"""
                 SELECT data_end 
-                FROM {TABLE_STOCK_METADATA} 
+                FROM {TABLE_PRICE_METADATA_LEGACY_EODHD}
                 WHERE symbol = %s AND interval = %s
                 ORDER BY last_updated DESC
                 LIMIT 1
@@ -340,27 +358,40 @@ class QuestDBClient:
             f"QuestDB DEDUP (symbol, interval, timestamp) overwrites rows on re-insert"
         )
     
-    def upsert_stock_metadata(self, symbol: str, interval: str, 
-                             data_start: datetime, data_end: datetime, 
-                             total_records: int):
+    def upsert_stock_metadata(self, symbol: str, interval: str, table: str):
         """
-        Insert or update stock metadata for tracking data freshness
+        Derive and persist truthful coverage for one price-table pair.
         
         Args:
             symbol: Stock symbol
             interval: Data interval
-            data_start: Earliest timestamp in data
-            data_end: Latest timestamp in data
-            total_records: Total number of records
+            table: Explicit production or legacy price table being described
         """
+        metadata_table = _metadata_table_for_price_table(table)
+
         try:
             self.ensure_connection()
+
+            self.cursor.execute(
+                f'SELECT count(), min(timestamp), max(timestamp) FROM "{table}" '
+                f'WHERE symbol = %s AND interval = %s',
+                (symbol, interval),
+            )
+            coverage = self.cursor.fetchone()
+            if not coverage or not coverage[0]:
+                logger.warning(
+                    f"No stored coverage found for {symbol}/{interval} in {table}; "
+                    "metadata was not written"
+                )
+                return
+
+            total_records, data_start, data_end = coverage
             now = datetime.now()
             today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
 
             # Check if we already have a row for today (designated timestamp = last_updated)
             self.cursor.execute(f"""
-                SELECT last_updated FROM {TABLE_STOCK_METADATA}
+                SELECT last_updated FROM {metadata_table}
                 WHERE symbol = %s AND interval = %s AND last_updated >= %s
                 ORDER BY last_updated DESC LIMIT 1
             """, (symbol, interval, today_start))
@@ -369,13 +400,13 @@ class QuestDBClient:
             if existing:
                 # UPDATE the existing row in today's partition to avoid accumulation
                 self.cursor.execute(f"""
-                    UPDATE {TABLE_STOCK_METADATA}
+                    UPDATE {metadata_table}
                     SET total_records = %s, data_start = %s, data_end = %s
                     WHERE symbol = %s AND interval = %s AND last_updated = %s
                 """, (total_records, data_start, data_end, symbol, interval, existing[0]))
             else:
                 self.cursor.execute(f"""
-                    INSERT INTO {TABLE_STOCK_METADATA}
+                    INSERT INTO {metadata_table}
                     (symbol, interval, last_updated, total_records, data_start, data_end, created_at)
                     VALUES (%s, %s, %s, %s, %s, %s, %s)
                 """, (symbol, interval, now, total_records, data_start, data_end, now))
@@ -409,7 +440,7 @@ class QuestDBClient:
                     # Check if metadata exists and is fresh
                     self.cursor.execute(f"""
                         SELECT data_end
-                        FROM {TABLE_STOCK_METADATA}
+                        FROM {TABLE_PRICE_METADATA_LEGACY_EODHD}
                         WHERE symbol = %s AND interval = %s
                         ORDER BY last_updated DESC
                         LIMIT 1
@@ -470,7 +501,7 @@ class QuestDBClient:
             placeholders = ','.join(['%s'] * len(symbols))
             self.cursor.execute(f"""
                 SELECT symbol, data_end, last_updated
-                FROM {TABLE_STOCK_METADATA}
+                FROM {TABLE_PRICE_METADATA_LEGACY_EODHD}
                 WHERE symbol IN ({placeholders})
                 AND interval = %s
                 ORDER BY symbol, last_updated DESC
@@ -842,6 +873,14 @@ class QuestDBClient:
         Descriptive fields are only overwritten when the caller actually supplies
         them. Most callers pass none, and blanking a name that another collector
         populated is how the accumulated rows ended up almost entirely empty.
+
+        Current-state writes are limited to last_price_update, is_active,
+        has_dividends and the exchange/name/sector/industry/currency fields; new
+        rows also initialise created_at and updated_at. The legacy price fields
+        total_price_records, earliest_price_date and latest_price_date are
+        deliberately not written: truthful price coverage now lives per
+        (symbol, interval) in stock_metadata. Other unwritten schema fields have
+        separate owners and are outside QCF-002.
         """
         if not data:
             return
