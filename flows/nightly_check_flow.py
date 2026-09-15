@@ -43,6 +43,8 @@ from flows.fundamentals_flow import load_symbols
 from flows.data_audit_flow import run_audit, compare      # reuse the quality census
 from api.yfinance_client import RateLimitedError
 from collectors.yfinance_price_collector import YFinancePriceCollector
+from config.tables import TABLE_ACTIONS_PRODUCTION
+from scripts.check_table_partitions import inspect_tables
 from scripts.heal_suspended_wal import heal as heal_wal
 
 PROD = 'stock_data'
@@ -150,6 +152,22 @@ def self_heal_wal() -> int:
     return healed
 
 
+@task(name="Check partition readability")
+def check_partition_readability() -> int:
+    """Report metadata/readability divergence; never attempt table repair."""
+    log = get_run_logger()
+    problems = 0
+    for finding in inspect_tables((TABLE_ACTIONS_PRODUCTION,)):
+        if finding.problem:
+            problems += 1
+            log.error(finding.message)
+        elif finding.deferred:
+            log.warning(finding.message)
+        else:
+            log.info(finding.message)
+    return problems
+
+
 @flow(name="Nightly Data Check", log_prints=True)
 def nightly_check_flow(stocks_file: str = "config/syariah_stocks.txt") -> Dict:
     log = get_run_logger()
@@ -157,6 +175,10 @@ def nightly_check_flow(stocks_file: str = "config/syariah_stocks.txt") -> Dict:
     # 0. un-stick any suspended WAL before anything reads stock_data — a
     #    suspended table serves stale data that looks perfectly plausible.
     self_heal_wal()
+
+    # Suspended WAL and partition-directory divergence are distinct faults. The
+    # latter is report-only: repair remains a deliberate, evidence-backed action.
+    check_partition_readability()
 
     # 1. quality (read-only census, fails on regression inside compare via history)
     q = quality(PROD)
