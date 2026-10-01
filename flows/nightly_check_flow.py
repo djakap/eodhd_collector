@@ -27,8 +27,8 @@ import io
 import os
 import sys
 from contextlib import redirect_stdout
-from datetime import datetime, timedelta
-from typing import Dict, List
+from datetime import date, datetime, timedelta
+from typing import Dict, Iterable, List, Mapping
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -60,6 +60,19 @@ def _connect():
 
 @task(name="Check completeness")
 def check_completeness(stocks_file: str) -> Dict:
+    """Measure daily completeness against the authoritative universe.
+
+    Required data means a daily (``interval='d'``) bar on or after the
+    settled day.  The settled day is the newest stored date reached by at
+    least ``COVERAGE_FLOOR`` of the full universe, including zero-row symbols
+    in the denominator.  This keeps weekends and an unfinished current
+    session from advancing the reference day.
+
+    ``missing_entirely`` contains universe members with no daily rows and
+    ``laggards`` contains members with rows older than the reference day.
+    Both lower ``coverage_ratio``, but remain separate so operators can tell
+    absence from staleness and healing can target both conditions.
+    """
     log = get_run_logger()
     symbols = set(load_symbols(stocks_file, None))
     conn = _connect()
@@ -69,30 +82,77 @@ def check_completeness(stocks_file: str) -> Dict:
     cur.execute(f"SELECT symbol, max(timestamp) FROM {PROD} WHERE interval='d' GROUP BY symbol")
     last = {s: t for s, t in cur.fetchall() if s in symbols}
 
-    # settled reference day: newest date reached by ≥ COVERAGE_FLOOR of symbols
-    from collections import Counter
-    day_counts = Counter(str(t)[:10] for t in last.values())
-    settled = None
-    for day in sorted(day_counts, reverse=True):
-        reached = sum(1 for t in last.values() if str(t)[:10] >= day)
-        if reached >= len(symbols) * COVERAGE_FLOOR:
-            settled = day
-            break
     conn.close()
 
-    if settled is None:
-        return {'settled': None, 'laggards': [], 'coverage': 0, 'stale_days': 999}
+    result = _compute_completeness(symbols, last)
 
-    laggards = sorted(s for s, t in last.items() if str(t)[:10] < settled)
-    coverage = len(symbols) - len(laggards)
-    stale_days = (datetime.now().date() - datetime.strptime(settled, '%Y-%m-%d').date()).days
+    log.info(f"Hari settled: {result['settled']} "
+             f"| cakupan {result['coverage']}/{result['total']} "
+             f"({result['coverage_ratio']:.2%}) "
+             f"| tertinggal {len(result['laggards'])} "
+             f"| tanpa data {len(result['missing_entirely'])} "
+             f"| umur {result['stale_days']} hari")
+    if result['laggards']:
+        log.info(f"  tertinggal (contoh): {result['laggards'][:15]}")
+    if result['missing_entirely']:
+        log.info(f"  tanpa data (contoh): {result['missing_entirely'][:15]}")
+    return result
 
-    log.info(f"Hari settled: {settled} | cakupan {coverage}/{len(symbols)} "
-             f"| tertinggal {len(laggards)} | umur {stale_days} hari")
-    if laggards:
-        log.info(f"  tertinggal (contoh): {laggards[:15]}")
-    return {'settled': settled, 'laggards': laggards,
-            'coverage': coverage, 'total': len(symbols), 'stale_days': stale_days}
+
+def _compute_completeness(
+    universe: Iterable[str],
+    newest_day_per_symbol: Mapping[str, object],
+    *,
+    as_of_date: date | None = None,
+) -> Dict:
+    """Return deterministic daily-completeness state for supplied observations.
+
+    ``as_of_date`` affects only ``stale_days``.  Supplying it makes fixtures
+    independent of wall-clock time; settled-day selection depends solely on
+    the universe and stored daily observations.
+    """
+    symbols = set(universe)
+    total = len(symbols)
+    newest_days = {
+        symbol: str(timestamp)[:10]
+        for symbol, timestamp in newest_day_per_symbol.items()
+        if symbol in symbols
+    }
+    missing_entirely = sorted(symbols - newest_days.keys())
+
+    settled = None
+    for day in sorted(set(newest_days.values()), reverse=True):
+        reached = sum(1 for newest in newest_days.values() if newest >= day)
+        if reached >= total * COVERAGE_FLOOR:
+            settled = day
+            break
+
+    reference_day = settled or max(newest_days.values(), default=None)
+    laggards = sorted(
+        symbol
+        for symbol, newest in newest_days.items()
+        if reference_day is not None and newest < reference_day
+    )
+    coverage = total - len(missing_entirely) - len(laggards)
+    coverage_ratio = coverage / total if total else 0.0
+
+    if reference_day is None:
+        stale_days = 999
+    else:
+        current_date = as_of_date or datetime.now().date()
+        stale_days = (
+            current_date - datetime.strptime(reference_day, '%Y-%m-%d').date()
+        ).days
+
+    return {
+        'settled': settled,
+        'total': total,
+        'coverage': coverage,
+        'coverage_ratio': coverage_ratio,
+        'laggards': laggards,
+        'missing_entirely': missing_entirely,
+        'stale_days': stale_days,
+    }
 
 
 @task(name="Heal missing symbols", retries=1, retry_delay_seconds=180)
@@ -186,23 +246,31 @@ def nightly_check_flow(stocks_file: str = "config/syariah_stocks.txt") -> Dict:
 
     # 2 + 3. completeness, then heal the gap, then re-check
     before = check_completeness(stocks_file)
-    healed = heal(before['laggards'])
+    before_candidates = sorted(set(before['laggards']) | set(before['missing_entirely']))
+    healed = heal(before_candidates)
     after = check_completeness(stocks_file) if healed.get('healed') else before
 
     # 4. verdict
     problems = []
     if quality_regressed:
         problems.append(f"kualitas mundur: {q['grown']} {q['appeared']}")
-    if after['stale_days'] >= STALE_DAYS:
+    if after['settled'] is None:
+        problems.append(f"hari settled tidak ditemukan — "
+                        f"{len(after['missing_entirely'])} simbol tanpa data")
+    elif after['stale_days'] >= STALE_DAYS:
         problems.append(f"data STALE — hari settled {after['settled']} "
                         f"berumur {after['stale_days']} hari (koleksi malam mungkin gagal)")
     # persistent laggards are only a problem if there are many (systemic), since a
     # handful are always delisted/illiquid symbols yfinance cannot serve
-    if len(after['laggards']) > HEAL_CAP:
-        problems.append(f"{len(after['laggards'])} simbol tertinggal setelah heal — sistemik")
+    after_candidates = set(after['laggards']) | set(after['missing_entirely'])
+    if len(after_candidates) > HEAL_CAP:
+        problems.append(f"{len(after_candidates)} simbol tertinggal/tanpa data "
+                        f"setelah heal — sistemik")
 
     log.info(f"RINGKASAN: settled={after['settled']} cakupan={after['coverage']}/{after['total']} "
-             f"tertinggal={len(after['laggards'])} disembuhkan={healed.get('healed',0)}")
+             f"({after['coverage_ratio']:.2%}) tertinggal={len(after['laggards'])} "
+             f"tanpa_data={len(after['missing_entirely'])} "
+             f"disembuhkan={healed.get('healed',0)}")
 
     if problems:
         raise RuntimeError("CEK MALAM GAGAL — " + " ; ".join(problems)
