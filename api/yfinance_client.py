@@ -290,10 +290,11 @@ class YFinanceClient:
         `interval` is OUR code ('d', 'w', 'm', '1h', '5m', ...), not Yahoo's — the
         caller should never have to know the mapping.
 
-        auto_adjust=False so Close stays the raw close and Adj Close is available
-        separately, matching how EODHD populates close vs adjusted_close. With
-        auto_adjust=True (the yfinance default) Close is silently the adjusted
-        series and would not line up with the existing rows.
+        auto_adjust=False keeps Close free of DIVIDEND adjustment, with Adj Close
+        alongside it. Close is still SPLIT-adjusted: Yahoo back-adjusts splits whatever
+        auto_adjust says, as of the moment of the fetch (docs/PRICE_ADJUSTMENT.md).
+        With auto_adjust=True (the yfinance default) Close would also be
+        dividend-adjusted and would not line up with the existing rows.
         """
         yf_interval = INTERVAL_MAP.get(interval)
         if yf_interval is None:

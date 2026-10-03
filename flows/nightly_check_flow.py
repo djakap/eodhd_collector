@@ -43,6 +43,7 @@ from flows.fundamentals_flow import load_symbols
 from flows.data_audit_flow import run_audit, compare      # reuse the quality census
 from api.yfinance_client import RateLimitedError
 from collectors.yfinance_price_collector import YFinancePriceCollector
+from scripts.check_adjustment_consistency import inspect_adjustment_consistency
 from scripts.check_table_partitions import inspect_all_tables
 from scripts.heal_suspended_wal import heal as heal_wal
 
@@ -229,6 +230,27 @@ def check_partition_readability() -> int:
     return problems
 
 
+@task(name="Check adjustment consistency")
+def check_adjustment_consistency() -> int:
+    """Report corporate-action adjustment defects; never rewrite prices (QCF-004)."""
+    log = get_run_logger()
+    try:
+        findings = inspect_adjustment_consistency()
+    except Exception as exc:
+        log.error(f"Pemeriksaan penyesuaian harga gagal dijalankan: {type(exc).__name__}: {exc}")
+        return 1
+    problems = 0
+    for finding in findings:
+        if finding.problem:
+            problems += 1
+            log.error(finding.message)
+        elif finding.known_defect:
+            log.warning(finding.message)
+        else:
+            log.info(finding.message)
+    return problems
+
+
 @flow(name="Nightly Data Check", log_prints=True)
 def nightly_check_flow(stocks_file: str = "config/syariah_stocks.txt") -> Dict:
     log = get_run_logger()
@@ -240,6 +262,9 @@ def nightly_check_flow(stocks_file: str = "config/syariah_stocks.txt") -> Dict:
     # Suspended WAL and partition-directory divergence are distinct faults. The
     # latter is report-only: repair remains a deliberate, evidence-backed action.
     partition_problems = check_partition_readability()
+
+    # Read-only consistency guard; repair belongs to DATA-003.
+    adjustment_problems = check_adjustment_consistency()
 
     # 1. quality (read-only census, fails on regression inside compare via history)
     q = quality(PROD)
@@ -255,6 +280,8 @@ def nightly_check_flow(stocks_file: str = "config/syariah_stocks.txt") -> Dict:
     problems = []
     if partition_problems > 0:
         problems.append(f"{partition_problems} tabel bermasalah pada pemeriksaan partisi")
+    if adjustment_problems > 0:
+        problems.append(f"{adjustment_problems} temuan penyesuaian harga belum terdaftar")
     if quality_regressed:
         problems.append(f"kualitas mundur: {q['grown']} {q['appeared']}")
     if after['settled'] is None:
