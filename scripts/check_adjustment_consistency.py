@@ -14,7 +14,7 @@ from typing import Iterable, Mapping, Optional, Sequence
 
 import psycopg2
 
-sys.path[:0] = [os.path.dirname(os.path.dirname(os.path.abspath(__file__)))]
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config.db_config import (
     QUESTDB_DATABASE,
@@ -26,21 +26,21 @@ from config.db_config import (
 from config.tables import TABLE_ACTIONS_PRODUCTION, TABLE_PRICES_PRODUCTION
 
 
-# QCF-004 §3.9 measures both stored intraday intervals against daily prices.
+# QCF-004 D2 measures both stored intraday intervals against daily prices.
 SCALE_INTERVALS = ("1h", "4h")
-# QCF-004 §3.3 measures a 1% floor above the snapshot's p99 scale deviation.
+# QCF-004 §3.3 / D2 sets a 1% floor above the snapshot's p99 scale deviation.
 SCALE_TOLERANCE = 0.01
-# QCF-004 §3.9 separates stable scale faults from wandering price gaps at 1%.
+# QCF-004 §3.9 / D2 separates stable scale faults from wandering gaps at 1%.
 SCALE_RUN_SPREAD = 0.01
-# QCF-004 §3.9 places 15 days between the longest clean and shortest bad run.
+# QCF-004 §3.9 / D2 places 15 days between the longest clean and shortest bad run.
 SCALE_MIN_RUN_DAYS = 15
-# QCF-004 §3.10 proves the NULL write generation reflects actions through this day.
+# QCF-004 §3.10 / D3 proves the NULL generation reflects actions through this day.
 NULL_CREATED_AT_AS_OF = datetime(2026, 7, 21, tzinfo=timezone.utc)
-# QCF-004 §3.9 uses seven days to absorb recorded-action date uncertainty.
+# QCF-004 §3.1 / D3 uses seven days to absorb recorded-action date uncertainty.
 ACTION_DATE_MARGIN = timedelta(days=7)
-# QCF-004 §3.9 measures intervals whose stored basis changes for each action type.
+# QCF-004 D3 identifies the intervals whose stored basis each action type changes.
 STALENESS_INTERVALS = {"split": ("d", "w", "m", "1h"), "dividend": ("d", "w", "m")}
-# QCF-004 §3.9 pins the six scale faults observed in the restored snapshot.
+# QCF-004 §3.9 / D4 pins the six scale faults observed in the restored snapshot.
 KNOWN_SCALE_RUNS = {
     ("CUAN.JK", "1h", "2024-08-20", "2025-07-09"): "DATA-003",
     ("CUAN.JK", "4h", "2024-08-20", "2025-07-09"): "DATA-003",
@@ -49,7 +49,7 @@ KNOWN_SCALE_RUNS = {
     ("KDSI.JK", "1h", "2024-08-21", "2024-11-04"): "DATA-003",
     ("KDSI.JK", "4h", "2024-08-21", "2024-11-04"): "DATA-003",
 }
-# QCF-004 §3.9 observes all post-backfill dividend histories as write-stale.
+# QCF-004 §3.9 / D4 registers post-backfill dividend staleness against DATA-003.
 KNOWN_STALENESS_CLASSES = {"dividend": "DATA-003"}
 
 
@@ -216,8 +216,7 @@ def assess(
         findings.append(
             AdjustmentFinding(
                 "registered_scale_run_missing",
-                f"registered scale run {key!r} is absent; "
-                "up" "date KNOWN_SCALE_RUNS deliberately",
+                f"registered scale run {key!r} is absent; update KNOWN_SCALE_RUNS deliberately",
                 problem=True,
                 known_defect=False,
             )

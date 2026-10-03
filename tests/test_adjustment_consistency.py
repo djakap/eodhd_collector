@@ -1,5 +1,6 @@
 """Deterministic regression coverage for QCF-004 adjustment consistency."""
 
+import ast
 from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
@@ -279,11 +280,51 @@ def test_t11_nightly_task_converts_inspection_exception_to_one_problem(monkeypat
     assert "RuntimeError: synthetic connection failure" in log.errors[0]
 
 
-def test_t12_inspection_module_contains_no_write_or_ddl_verbs():
-    source = (ROOT / "scripts/check_adjustment_consistency.py").read_text(encoding="utf-8")
-    forbidden = ("INSERT", "UPDATE", "DELETE", "DROP", "ALTER", "TRUNCATE", "CREATE")
+WRITE_STATEMENT = re.compile(
+    r"\b(INSERT\s+INTO|UPDATE\s+\w+\s+SET|DELETE\s+FROM|DROP\s+\w+|"
+    r"ALTER\s+\w+|TRUNCATE\s+\w+|CREATE\s+\w+)\b",
+    re.IGNORECASE,
+)
 
-    assert not [word for word in forbidden if re.search(rf"\b{word}\b", source, re.IGNORECASE)]
+
+def _execute_statements(source):
+    statements = []
+    for node in ast.walk(ast.parse(source)):
+        if not (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "execute"
+            and node.args
+        ):
+            continue
+        statement = node.args[0]
+        if isinstance(statement, ast.Constant) and isinstance(statement.value, str):
+            statements.append(statement.value)
+        elif isinstance(statement, ast.JoinedStr):
+            statements.append(
+                "".join(
+                    part.value
+                    for part in statement.values
+                    if isinstance(part, ast.Constant) and isinstance(part.value, str)
+                )
+            )
+    return statements
+
+
+def _write_statements(source):
+    return [statement for statement in _execute_statements(source) if WRITE_STATEMENT.search(statement)]
+
+
+def test_t12_inspection_executes_only_select_statements_with_negative_control():
+    source = (ROOT / "scripts/check_adjustment_consistency.py").read_text(encoding="utf-8")
+    statements = _execute_statements(source)
+
+    assert len(statements) >= 3
+    assert all(statement.strip().upper().startswith(("SELECT", "WITH")) for statement in statements)
+    assert _write_statements(source) == []
+
+    unsafe = 'cursor.execute("UPDATE stock_data SET close = 1")'
+    assert _write_statements(unsafe) == ["UPDATE stock_data SET close = 1"]
 
 
 class _FakeCursor:
