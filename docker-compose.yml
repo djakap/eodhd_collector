@@ -111,7 +111,8 @@ services:
     volumes:
       - worker_logs:/app/logs
       - questdb_data:/questdb-data:ro
-      - ./backups:/backup
+      # Named volume avoids the WSL2 bind mount detaching across Docker restarts.
+      - backups:/backup
       # Code (flows/, collectors/, prefect.yaml) is BAKED into the image via the Dockerfile
       # COPY steps — deliberately NOT bind-mounted. Single-file bind mounts (esp.
       # prefect.yaml) broke on WSL2/Docker restart ("mount directory onto file"), which
@@ -135,4 +136,7 @@ volumes:
     external: true
   worker_logs:
     name: eodhd_collector_optimized_worker_logs
+    external: true
+  backups:
+    name: eodhd_collector_backups
     external: true

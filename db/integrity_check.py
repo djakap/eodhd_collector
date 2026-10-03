@@ -384,6 +384,27 @@ def check_ohlc_validity(cur, report: IntegrityReport):
 # Orchestration
 # ---------------------------------------------------------------------------
 
+def _build_table_manifest_entry(cur, table: str, ts_col: Optional[str],
+                                report: IntegrityReport, deep: bool = True) -> Dict:
+    """Build one table's manifest entry through the canonical fingerprint path."""
+    cur.execute(f'SELECT count() FROM "{table}"')
+    total = cur.fetchone()[0]
+
+    parts = check_partitions(cur, table, report)
+
+    fingerprints = []
+    if deep and total > 0 and ts_col:
+        value_col = 'close' if table == PRICE_TABLE else None
+        fingerprints = deep_read_scan(cur, table, ts_col, parts, report, value_col)
+
+    return {
+        'rows': total,
+        'timestamp_column': ts_col,
+        'partitions': len(parts),
+        'fingerprints': fingerprints,
+    }
+
+
 def run_checks(conn, deep: bool = True) -> IntegrityReport:
     report = IntegrityReport()
     cur = conn.cursor()
@@ -397,26 +418,13 @@ def run_checks(conn, deep: bool = True) -> IntegrityReport:
     tables = [t for t, _ in table_meta]
 
     for table, ts_col in table_meta:
-        cur.execute(f'SELECT count() FROM "{table}"')
-        total = cur.fetchone()[0]
+        entry = _build_table_manifest_entry(cur, table, ts_col, report, deep=deep)
 
-        parts = check_partitions(cur, table, report)
-
-        fingerprints = []
-        if deep and total > 0 and ts_col:
-            value_col = 'close' if table == PRICE_TABLE else None
-            fingerprints = deep_read_scan(cur, table, ts_col, parts, report, value_col)
-
-        if total > 0 and ts_col:
+        if entry['rows'] > 0 and ts_col:
             check_timestamp_sanity(cur, table, ts_col, report)
             check_partition_bounds(cur, table, report)
 
-        report.manifest['tables'][table] = {
-            'rows': total,
-            'timestamp_column': ts_col,
-            'partitions': len(parts),
-            'fingerprints': fingerprints,
-        }
+        report.manifest['tables'][table] = entry
 
     check_table_bloat(cur, report)
 
@@ -431,8 +439,11 @@ def verify_manifest(conn, manifest_path: str) -> IntegrityReport:
     """
     Compare a live database against a manifest — the restore-side check.
 
-    Proves a restored copy is identical to what was backed up, rather than merely
-    present and queryable.
+    Identity requires, per manifest table, the same total row count and partition
+    count; the same set of populated partition names; and equal rows, minimum
+    timestamp, maximum timestamp, and checksum for every populated partition.
+    ``disk_bytes`` is deliberately excluded because restored partitions may be
+    physically compacted without changing their contents.
     """
     report = IntegrityReport()
     with open(manifest_path) as f:
@@ -440,18 +451,52 @@ def verify_manifest(conn, manifest_path: str) -> IntegrityReport:
 
     cur = conn.cursor()
     for table, exp in expected.get('tables', {}).items():
+        # Verification judges identity only. Health findings collected while the
+        # canonical fingerprint path reads the live table are deliberately kept
+        # separate from the restore verdict.
+        fingerprint_report = IntegrityReport()
         try:
-            cur.execute(f'SELECT count() FROM "{table}"')
-            actual = cur.fetchone()[0]
+            actual = _build_table_manifest_entry(
+                cur,
+                table,
+                exp.get('timestamp_column'),
+                fingerprint_report,
+                deep=True,
+            )
         except Exception as e:
             report.fail(f"{table}: missing after restore ({e})")
             continue
 
-        if actual != exp['rows']:
-            report.fail(f"{table}: {actual:,} rows, expected {exp['rows']:,} "
-                        f"(delta {actual - exp['rows']:+,})")
-        else:
-            report.note(f"{table}: {actual:,} rows — matches manifest")
+        for field in ('rows', 'partitions'):
+            if actual[field] != exp[field]:
+                report.fail(
+                    f"{table}: {field} mismatch after restore "
+                    f"(actual {actual[field]!r}, expected {exp[field]!r})"
+                )
+
+        expected_parts = {fp['partition']: fp for fp in exp.get('fingerprints', [])}
+        actual_parts = {fp['partition']: fp for fp in actual.get('fingerprints', [])}
+
+        for partition in sorted(expected_parts.keys() - actual_parts.keys()):
+            report.fail(f"{table}: partition '{partition}' missing after restore")
+        for partition in sorted(actual_parts.keys() - expected_parts.keys()):
+            report.fail(f"{table}: extra partition '{partition}' after restore")
+
+        for partition in sorted(expected_parts.keys() & actual_parts.keys()):
+            exp_fp = expected_parts[partition]
+            actual_fp = actual_parts[partition]
+            for field in ('rows', 'min_timestamp', 'max_timestamp', 'checksum'):
+                if actual_fp.get(field) != exp_fp.get(field):
+                    report.fail(
+                        f"{table}: partition '{partition}' {field} mismatch after restore "
+                        f"(actual {actual_fp.get(field)!r}, expected {exp_fp.get(field)!r})"
+                    )
+
+        if not any(msg.startswith(f"{table}:") for msg in report.critical):
+            report.note(
+                f"{table}: {actual['rows']:,} rows across "
+                f"{len(actual_parts)} populated partition(s) — matches manifest"
+            )
 
     cur.close()
     return report

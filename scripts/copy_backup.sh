@@ -37,25 +37,48 @@ fi
 
 COPIED=0
 SKIPPED=0
+MANIFEST_COPIED=0
+MANIFEST_SKIPPED=0
+MISSING_MANIFEST=0
 
 while IFS= read -r FILEPATH; do
     FILENAME=$(basename "$FILEPATH")
     DEST="$BACKUP_DIR/$FILENAME"
+    MANIFEST_FILENAME="${FILENAME%.tar.gz}.manifest.json"
+    MANIFEST_PATH="$(dirname "$FILEPATH")/$MANIFEST_FILENAME"
+    MANIFEST_DEST="$BACKUP_DIR/$MANIFEST_FILENAME"
 
     if [ -f "$DEST" ]; then
         echo "SKIP  $FILENAME (already exists)"
         SKIPPED=$((SKIPPED + 1))
-        continue
+    else
+        echo -n "COPY  $FILENAME ... "
+        docker exec "$CONTAINER" cat "$FILEPATH" > "$DEST"
+        SIZE=$(du -h "$DEST" | cut -f1)
+        echo "done ($SIZE)"
+        COPIED=$((COPIED + 1))
     fi
 
-    echo -n "COPY  $FILENAME ... "
-    docker exec "$CONTAINER" cat "$FILEPATH" > "$DEST"
-    SIZE=$(du -h "$DEST" | cut -f1)
-    echo "done ($SIZE)"
-    COPIED=$((COPIED + 1))
+    if ! docker exec "$CONTAINER" test -f "$MANIFEST_PATH"; then
+        echo "ERROR $MANIFEST_FILENAME is missing in the container"
+        MISSING_MANIFEST=$((MISSING_MANIFEST + 1))
+    elif [ -f "$MANIFEST_DEST" ]; then
+        echo "SKIP  $MANIFEST_FILENAME (already exists)"
+        MANIFEST_SKIPPED=$((MANIFEST_SKIPPED + 1))
+    else
+        echo -n "COPY  $MANIFEST_FILENAME ... "
+        docker exec "$CONTAINER" cat "$MANIFEST_PATH" > "$MANIFEST_DEST"
+        echo "done"
+        MANIFEST_COPIED=$((MANIFEST_COPIED + 1))
+    fi
 done <<< "$FILES"
 
 echo ""
 echo "Done. Copied: $COPIED | Skipped (already exist): $SKIPPED"
+echo "Manifests copied: $MANIFEST_COPIED | Skipped: $MANIFEST_SKIPPED | Missing: $MISSING_MANIFEST"
 echo "Files in $BACKUP_DIR:"
-ls -lh "$BACKUP_DIR"/*.tar.gz 2>/dev/null || echo "  (none)"
+ls -lh "$BACKUP_DIR"/questdb_backup_* 2>/dev/null || echo "  (none)"
+
+if [ "$MISSING_MANIFEST" -gt 0 ]; then
+    exit 1
+fi
