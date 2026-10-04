@@ -41,10 +41,10 @@ Three stored series are already inconsistent across intervals:
   older than the action whose last write predates it. This found stale rows for all 15 measured
   dividends.
 
-`KNOWN_SCALE_RUNS` registers the six symbol/interval runs above, and
-`KNOWN_STALENESS_CLASSES` registers dividend staleness as a class. Each entry means the defect is
-known and tracked by DATA-003; it does not mean the data is correct. A new finding, a split-staleness
-finding, or a registered run that disappears is a problem and fails the nightly flow.
+`KNOWN_SCALE_RUNS` now registers only FISH.JK's two provider-served runs.
+`KNOWN_STALENESS_CLASSES` is empty because DATA-003 repairs dividend staleness. A new finding, a
+split-staleness finding, or a registered run that disappears is a problem and fails the nightly
+flow.
 
 The scale check cannot see a factor below 1.01. The staleness check intentionally over-reports a
 HUMI-style case where rows predate an action but the provider did not change their values. That is
@@ -61,5 +61,19 @@ a registered scale run has vanished.
 
 ## Repair
 
-DATA-003 owns re-fetching and repair. Until then, treat a dividend-adjusted series across a recent
-dividend, and any series across a recent split, as suspect.
+The nightly DATA-003 heal runs before the consistency guard. A stale dividend triggers a full
+`d`/`w`/`m` re-fetch. A stale split or unregistered scale run additionally fetches fresh `1h` over a
+728-day request window inside Yahoo's nominal 730-day limit, gates any older-tail correction on a
+constant overlap factor matching a recorded split, and re-derives `4h`. It processes at most 25
+targets per night; the following guard reports anything it could not fix.
+
+The same path is available as a CLI. It is a read-only dry run by default; use `--recorded DIR` for
+recorded provider evidence, and use `--apply` only on the production repair host after its backup
+gate. Apply records are written under `ADJUSTMENT_REPAIR_DIR` (default
+`/backup/adjustment_repairs`) with before/after hashes and the original OHLC of every corrected tail
+bar.
+
+FISH.JK's existing cross-interval inconsistency is left exactly as the provider serves it and is
+unreliable. Its registered scale runs do not trigger repair, but a future corporate action on FISH
+is handled normally. Research metrics computed before a recorded repair, for a symbol named in that
+record, are not comparable with metrics computed afterwards.

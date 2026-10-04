@@ -141,6 +141,7 @@ def test_t7_cliff_verdict_names_missing_count_without_key_error(monkeypatch):
     monkeypatch.setattr(nightly, "get_run_logger", lambda: logging.getLogger("qcf003-t7"))
     monkeypatch.setattr(nightly, "self_heal_wal", lambda: 0)
     monkeypatch.setattr(nightly, "check_partition_readability", lambda: 0)
+    monkeypatch.setattr(nightly, "heal_adjustments", lambda: {})
     monkeypatch.setattr(nightly, "check_adjustment_consistency", lambda: 0)
     monkeypatch.setattr(nightly, "quality", lambda _table: {})
     monkeypatch.setattr(nightly, "check_completeness", lambda _path: result)

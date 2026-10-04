@@ -168,6 +168,7 @@ def _stub_nightly(monkeypatch, partition_problem_count):
         "check_partition_readability",
         lambda: partition_problem_count,
     )
+    monkeypatch.setattr(nightly, "heal_adjustments", lambda: {})
     monkeypatch.setattr(nightly, "check_adjustment_consistency", lambda: 0)
     monkeypatch.setattr(nightly, "quality", lambda _table: {})
     monkeypatch.setattr(nightly, "check_completeness", lambda _path: healthy)

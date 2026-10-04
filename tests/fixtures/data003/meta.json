@@ -1,0 +1,86 @@
+{
+ "fetched_at_utc": "2026-10-04T01:34:52.209513+00:00",
+ "yfinance": "1.7.0",
+ "requests": [
+  {
+   "symbol": "CUAN.JK",
+   "interval": "1h",
+   "start": "2024-10-06",
+   "end": "2025-08-16",
+   "rows": 1368,
+   "file": "CUAN.JK_1h.json"
+  },
+  {
+   "symbol": "CUAN.JK",
+   "interval": "d",
+   "start": "2024-10-01",
+   "end": "2025-08-16",
+   "rows": 205,
+   "file": "CUAN.JK_d.json"
+  },
+  {
+   "symbol": "KDSI.JK",
+   "interval": "1h",
+   "start": "2024-10-06",
+   "end": "2024-12-16",
+   "rows": 182,
+   "file": "KDSI.JK_1h.json"
+  },
+  {
+   "symbol": "KDSI.JK",
+   "interval": "d",
+   "start": "2024-10-01",
+   "end": "2024-12-16",
+   "rows": 53,
+   "file": "KDSI.JK_d.json"
+  },
+  {
+   "symbol": "FISH.JK",
+   "interval": "1h",
+   "start": "2024-10-06",
+   "end": "2025-10-16",
+   "rows": 130,
+   "file": "FISH.JK_1h.json"
+  },
+  {
+   "symbol": "FISH.JK",
+   "interval": "d",
+   "start": "2024-06-01",
+   "end": "2025-10-16",
+   "rows": 329,
+   "file": "FISH.JK_d.json"
+  },
+  {
+   "symbol": "IKBI.JK",
+   "interval": "d",
+   "start": null,
+   "end": null,
+   "rows": 6052,
+   "file": "IKBI.JK_d.json"
+  },
+  {
+   "symbol": "CMRY.JK",
+   "interval": "d",
+   "start": null,
+   "end": null,
+   "rows": 1159,
+   "file": "CMRY.JK_d.json"
+  },
+  {
+   "symbol": "MLPT.JK",
+   "interval": "1h",
+   "start": "2026-06-01",
+   "end": "2026-08-16",
+   "rows": 352,
+   "file": "MLPT.JK_1h.json"
+  },
+  {
+   "symbol": "MLPT.JK",
+   "interval": "d",
+   "start": "2026-06-01",
+   "end": "2026-08-16",
+   "rows": 55,
+   "file": "MLPT.JK_d.json"
+  }
+ ]
+}

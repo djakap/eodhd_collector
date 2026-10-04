@@ -1,0 +1,1 @@
+[{"symbol": "CUAN.JK", "action_type": "split", "action_date": "2025-07-15T00:00:00", "split_ratio": "10/1", "split_from": 10, "split_to": 1}, {"symbol": "CUAN.JK", "action_type": "dividend", "action_date": "2025-04-30T00:00:00", "dividend_amount": 0.3222, "dividend_currency": "IDR"}]

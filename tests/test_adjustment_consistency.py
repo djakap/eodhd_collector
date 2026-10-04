@@ -175,7 +175,7 @@ def _registered_runs():
 def test_t8_assess_classifies_registered_unregistered_and_vanished_runs():
     registered = assess(_registered_runs(), [])
     scale_findings = [finding for finding in registered if finding.kind == "scale_run"]
-    assert len(scale_findings) == 6
+    assert len(scale_findings) == 2
     assert all(finding.known_defect and not finding.problem for finding in scale_findings)
     assert all("DATA-003" in finding.message for finding in scale_findings)
 
@@ -195,7 +195,12 @@ def test_t9_assess_classifies_stale_action_types():
     dividend = StaleAction("DIV.JK", "dividend", "2026-08-11", {"d": 10})
     split = StaleAction("SPLIT.JK", "split", "2026-08-11", {"d": 10, "1h": 4})
 
-    known = assess([], [dividend], known_scale_runs={})[0]
+    known = assess(
+        [],
+        [dividend],
+        known_scale_runs={},
+        known_staleness={"dividend": "DATA-003"},
+    )[0]
     assert known.kind == "dividend_stale"
     assert known.known_defect and not known.problem
     assert "DATA-003" in known.message
@@ -239,6 +244,7 @@ def _stub_healthy_flow(monkeypatch, adjustment_problems):
     }
     monkeypatch.setattr(nightly, "self_heal_wal", lambda: 0)
     monkeypatch.setattr(nightly, "check_partition_readability", lambda: 0)
+    monkeypatch.setattr(nightly, "heal_adjustments", lambda: {})
     monkeypatch.setattr(nightly, "check_adjustment_consistency", lambda: adjustment_problems)
     monkeypatch.setattr(nightly, "quality", lambda _table: {})
     monkeypatch.setattr(nightly, "check_completeness", lambda _path: healthy)
@@ -365,12 +371,8 @@ def test_t13_wire_parameters_are_strings_and_naive_results_are_supported():
 
 def test_t14_registries_are_exactly_the_approved_data_003_entries():
     assert set(KNOWN_SCALE_RUNS) == {
-        ("CUAN.JK", "1h", "2024-08-20", "2025-07-09"),
-        ("CUAN.JK", "4h", "2024-08-20", "2025-07-09"),
         ("FISH.JK", "1h", "2024-08-20", "2025-01-15"),
         ("FISH.JK", "4h", "2024-08-20", "2025-01-15"),
-        ("KDSI.JK", "1h", "2024-08-21", "2024-11-04"),
-        ("KDSI.JK", "4h", "2024-08-21", "2024-11-04"),
     }
     assert set(KNOWN_SCALE_RUNS.values()) == {"DATA-003"}
-    assert KNOWN_STALENESS_CLASSES == {"dividend": "DATA-003"}
+    assert KNOWN_STALENESS_CLASSES == {}

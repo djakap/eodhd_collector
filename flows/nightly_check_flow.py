@@ -46,6 +46,11 @@ from collectors.yfinance_price_collector import YFinancePriceCollector
 from scripts.check_adjustment_consistency import inspect_adjustment_consistency
 from scripts.check_table_partitions import inspect_all_tables
 from scripts.heal_suspended_wal import heal as heal_wal
+from scripts.repair_adjustments import (
+    ADJUSTMENT_HEAL_CAP,
+    apply_plan,
+    plan_repairs,
+)
 
 PROD = 'stock_data'
 COVERAGE_FLOOR = 0.90        # a "settled" day is one ≥90% of symbols reached
@@ -251,6 +256,51 @@ def check_adjustment_consistency() -> int:
     return problems
 
 
+@task(name="Heal adjustment defects")
+def heal_adjustments() -> Dict:
+    """Re-fetch / correct history behind corporate actions (DATA-003); registered runs are left alone."""
+    log = get_run_logger()
+    summary = {"planned": 0, "applied": 0, "deferred": 0}
+    try:
+        with YFinancePriceCollector(update_mode=False) as collector:
+            plan = plan_repairs(
+                connection=None,
+                provider=collector.api,
+                cap=ADJUSTMENT_HEAL_CAP,
+            )
+            plan["mode"] = "nightly"
+            summary["planned"] = plan["target_count"]
+            summary["deferred"] = plan["deferred"]
+            record = apply_plan(plan, collector)
+            summary["applied"] = len(record["targets"])
+            if record.get("record_file"):
+                summary["record_file"] = record["record_file"]
+            for target in record["targets"]:
+                log.info(
+                    f"Adjustment heal {target['symbol']}: "
+                    f"{', '.join(target['reasons'])}"
+                )
+    except RateLimitedError as exc:
+        record = getattr(exc, "record", {})
+        summary["applied"] = len(record.get("targets", []))
+        if record.get("record_file"):
+            summary["record_file"] = record["record_file"]
+        summary["error"] = f"RateLimitedError: {exc}"
+        log.error(f"Adjustment heal berhenti karena rate limit: {exc}")
+    except Exception as exc:
+        record = getattr(exc, "record", {})
+        summary["applied"] = len(record.get("targets", []))
+        if record.get("record_file"):
+            summary["record_file"] = record["record_file"]
+        summary["error"] = f"{type(exc).__name__}: {exc}"
+        log.error(f"Adjustment heal gagal: {type(exc).__name__}: {exc}")
+    log.info(
+        f"Adjustment heal: planned={summary['planned']} "
+        f"applied={summary['applied']} deferred={summary['deferred']}"
+    )
+    return summary
+
+
 @flow(name="Nightly Data Check", log_prints=True)
 def nightly_check_flow(stocks_file: str = "config/syariah_stocks.txt") -> Dict:
     log = get_run_logger()
@@ -263,7 +313,9 @@ def nightly_check_flow(stocks_file: str = "config/syariah_stocks.txt") -> Dict:
     # latter is report-only: repair remains a deliberate, evidence-backed action.
     partition_problems = check_partition_readability()
 
-    # Read-only consistency guard; repair belongs to DATA-003.
+    heal_adjustments()
+
+    # The consistency guard reports anything DATA-003's heal left behind.
     adjustment_problems = check_adjustment_consistency()
 
     # 1. quality (read-only census, fails on regression inside compare via history)

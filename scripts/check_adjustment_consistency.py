@@ -40,17 +40,13 @@ NULL_CREATED_AT_AS_OF = datetime(2026, 7, 21, tzinfo=timezone.utc)
 ACTION_DATE_MARGIN = timedelta(days=7)
 # QCF-004 D3 identifies the intervals whose stored basis each action type changes.
 STALENESS_INTERVALS = {"split": ("d", "w", "m", "1h"), "dividend": ("d", "w", "m")}
-# QCF-004 §3.9 / D4 pins the six scale faults observed in the restored snapshot.
+# DATA-003 D6 keeps only FISH's provider-served inconsistency registered.
 KNOWN_SCALE_RUNS = {
-    ("CUAN.JK", "1h", "2024-08-20", "2025-07-09"): "DATA-003",
-    ("CUAN.JK", "4h", "2024-08-20", "2025-07-09"): "DATA-003",
     ("FISH.JK", "1h", "2024-08-20", "2025-01-15"): "DATA-003",
     ("FISH.JK", "4h", "2024-08-20", "2025-01-15"): "DATA-003",
-    ("KDSI.JK", "1h", "2024-08-21", "2024-11-04"): "DATA-003",
-    ("KDSI.JK", "4h", "2024-08-21", "2024-11-04"): "DATA-003",
 }
-# QCF-004 §3.9 / D4 registers post-backfill dividend staleness against DATA-003.
-KNOWN_STALENESS_CLASSES = {"dividend": "DATA-003"}
+# DATA-003 D6 removes the repaired dividend-staleness class registration.
+KNOWN_STALENESS_CLASSES = {}
 
 
 @dataclass(frozen=True)

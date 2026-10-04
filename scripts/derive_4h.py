@@ -25,6 +25,7 @@ import argparse
 import os
 import sys
 import time
+from typing import Optional
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -44,7 +45,7 @@ BUCKET = ("CASE WHEN hour(timestamp) IN (2,3,4) "
           "THEN dateadd('h',6,date_trunc('day',timestamp)) END")
 
 
-def derive(since: str = None) -> int:
+def derive(since: str = None, *, symbol: Optional[str] = None) -> int:
     conn = psycopg2.connect(host=QUESTDB_HOST, port=QUESTDB_PG_PORT, user=QUESTDB_USER,
                             password=QUESTDB_PASSWORD, database=QUESTDB_DATABASE)
     conn.autocommit = True
@@ -54,8 +55,10 @@ def derive(since: str = None) -> int:
              "AND open IS NOT NULL")
     if since:
         where += f" AND timestamp >= '{since}'"
+    if symbol:
+        where += " AND symbol = %s"
 
-    cur.execute(f"""
+    insert_sql = f"""
         INSERT INTO {TABLE}
         SELECT symbol, '4h' as interval, {BUCKET} as ts,
             first(open), max(high), min(low), last(close), last(adjusted_close),
@@ -63,11 +66,20 @@ def derive(since: str = None) -> int:
         FROM {TABLE}
         WHERE {where}
         GROUP BY symbol, {BUCKET}
-    """)
+    """
+    if symbol:
+        cur.execute(insert_sql, (symbol,))
+    else:
+        cur.execute(insert_sql)
     time.sleep(6)      # let the WAL apply before counting
     scope = f" (>= {since})" if since else ""
-    cur.execute(f"SELECT count() FROM {TABLE} WHERE interval='4h'"
-                + (f" AND timestamp >= '{since}'" if since else ""))
+    count_sql = (f"SELECT count() FROM {TABLE} WHERE interval='4h'"
+                 + (f" AND timestamp >= '{since}'" if since else ""))
+    if symbol:
+        count_sql += " AND symbol = %s"
+        cur.execute(count_sql, (symbol,))
+    else:
+        cur.execute(count_sql)
     n = cur.fetchone()[0]
     conn.close()
     print(f"4h bars in scope{scope}: {n:,}")
@@ -77,4 +89,6 @@ def derive(since: str = None) -> int:
 if __name__ == "__main__":
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--since', help="only derive from 1h at or after this date")
-    derive(p.parse_args().since)
+    p.add_argument('--symbol', help="only derive one symbol")
+    args = p.parse_args()
+    derive(args.since, symbol=args.symbol)
