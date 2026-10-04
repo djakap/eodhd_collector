@@ -436,10 +436,17 @@ def _write_json_record(record, directory, now, suffix):
     directory.mkdir(parents=True, exist_ok=True)
     stamp = _as_datetime(now).strftime("%Y%m%dT%H%M%SZ")
     path = directory / f"{stamp}_{suffix}.json"
-    path.write_text(
-        json.dumps(record, indent=2, default=_json_default) + "\n",
-        encoding="utf-8",
+    temporary = directory / (
+        f".{path.name}.{os.getpid()}.{time.monotonic_ns()}.tmp"
     )
+    try:
+        with temporary.open("w", encoding="utf-8") as handle:
+            handle.write(json.dumps(record, indent=2, default=_json_default) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
     return str(path)
 
 
@@ -468,17 +475,24 @@ def apply_plan(plan: RepairPlan, collector, *, now=None) -> dict:
         "errors": list(plan.get("errors", [])),
     }
     record_dir = plan.record_dir or ADJUSTMENT_REPAIR_DIR
+    current_target = None
 
     try:
         for item in plan.get("targets", []):
             symbol = item["symbol"]
-            target_record = {
+            current_target = {
                 "symbol": symbol,
                 "reasons": list(item["reasons"]),
                 "split_style": item["split_style"],
                 "intervals": item["intervals"],
                 "tail_correction": None,
+                "status": "in_progress",
             }
+            record["targets"].append(current_target)
+            record["record_file"] = _write_json_record(
+                record, record_dir, applied_at, mode
+            )
+
             collector.collect_eod(symbol)
             if item["split_style"]:
                 fresh = plan.fresh_1h.get(symbol, [])
@@ -487,10 +501,13 @@ def apply_plan(plan: RepairPlan, collector, *, now=None) -> dict:
                 tail_rows = plan.tail_rows.get(symbol, [])
                 corrected = correct_rows(tail_rows, decision, applied_at)
                 if corrected:
-                    target_record["tail_correction"] = {
+                    current_target["tail_correction"] = {
                         **item["tail_decision"],
                         "originals": _original_ohlc(tail_rows),
                     }
+                    record["record_file"] = _write_json_record(
+                        record, record_dir, applied_at, mode
+                    )
                     collector.db.insert_price_data(
                         corrected,
                         table=TABLE_PRICES_PRODUCTION,
@@ -500,24 +517,29 @@ def apply_plan(plan: RepairPlan, collector, *, now=None) -> dict:
             if item["split_style"]:
                 derive_4h(symbol=symbol)
                 wait_for_wal(collector.db.cursor)
-            for interval in target_record["intervals"]:
-                target_record["intervals"][interval]["after"] = _state_dict(
+            for interval in current_target["intervals"]:
+                current_target["intervals"][interval]["after"] = _state_dict(
                     collector.db.cursor,
                     symbol,
                     interval,
                 )
-            record["targets"].append(target_record)
+            current_target["status"] = "complete"
+            record["record_file"] = _write_json_record(
+                record, record_dir, applied_at, mode
+            )
+            current_target = None
     except Exception as exc:
-        record["errors"].append(f"{type(exc).__name__}: {exc}")
-        if record["targets"]:
+        error = f"{type(exc).__name__}: {exc}"
+        record["errors"].append(error)
+        if current_target is not None:
+            current_target["status"] = "failed"
+            current_target["error"] = error
             record["record_file"] = _write_json_record(
                 record, record_dir, applied_at, mode
             )
         exc.record = record
         raise
 
-    if record["targets"]:
-        record["record_file"] = _write_json_record(record, record_dir, applied_at, mode)
     return record
 
 

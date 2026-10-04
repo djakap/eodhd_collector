@@ -349,6 +349,9 @@ def test_t8_apply_plan_order_and_record(monkeypatch, tmp_path):
     assert record["targets"][0]["tail_correction"] is None
     assert record["targets"][1]["tail_correction"]["originals"][0]["close"] == 10.5
     assert record["targets"][1]["intervals"]["4h"]["after"]["rows"] == 2
+    assert [target["status"] for target in record["targets"]] == [
+        "complete", "complete",
+    ]
     assert Path(record["record_file"]).exists()
 
 
@@ -503,7 +506,142 @@ def test_t11_nightly_cap_and_rate_limit_summary(monkeypatch, tmp_path):
     assert summary["error"] == "RateLimitedError: synthetic"
     assert calls == ["S00.JK", "S01.JK"]
     record = json.loads(Path(summary["record_file"]).read_text(encoding="utf-8"))
-    assert [target["symbol"] for target in record["targets"]] == ["S00.JK"]
+    assert [target["symbol"] for target in record["targets"]] == [
+        "S00.JK", "S01.JK",
+    ]
+    assert [target["status"] for target in record["targets"]] == [
+        "complete", "failed",
+    ]
+    assert record["targets"][1]["error"] == "RateLimitedError: synthetic"
+
+
+def _write_ahead_plan(symbols, record_dir):
+    decision = repair.TailDecision(
+        "2024-10-01T02:00:00", 20, 20, 0.25,
+        ("2025-01-01", "4/1"), "multiply", 4.0, 1, "matched split",
+    )
+    targets = []
+    for symbol in symbols:
+        targets.append(
+            {
+                "symbol": symbol,
+                "reasons": ["split 2026-09-01"],
+                "split_style": True,
+                "intervals": {
+                    interval: {
+                        "before": {"rows": 1, "sha256": f"before-{symbol}-{interval}"},
+                        "after": None,
+                    }
+                    for interval in ("d", "w", "m", "1h", "4h")
+                },
+                "tail_decision": repair.asdict(decision),
+            }
+        )
+
+    plan = repair.RepairPlan(
+        mode="cli",
+        today="2026-10-04",
+        targets=targets,
+        errors=[],
+    )
+    plan.record_dir = record_dir
+    for symbol in symbols:
+        plan.fresh_1h[symbol] = [{"timestamp": "2024-10-01T02:00:00"}]
+        plan.tail_rows[symbol] = [
+            (
+                symbol, "1h", datetime(2024, 8, 20, 2),
+                10.0, 11.0, 9.0, 10.5, None, 1000, None,
+                "intraday", datetime(2026, 7, 21),
+            )
+        ]
+    return plan
+
+
+@pytest.mark.parametrize("failed_index", [0, 1])
+def test_t16_write_ahead_record_survives_tail_failure(
+    monkeypatch, tmp_path, failed_index,
+):
+    symbols = ["FIRST.JK", "SECOND.JK"][:failed_index + 1]
+    failed_symbol = symbols[-1]
+    snapshots_at_insert = {}
+    replacements = []
+    real_replace = repair.os.replace
+
+    def atomic_replace(source, destination):
+        source = Path(source)
+        destination = Path(destination)
+        replacements.append((source, destination))
+        assert source.parent == destination.parent == tmp_path
+        assert source != destination
+        real_replace(source, destination)
+
+    monkeypatch.setattr(repair.os, "replace", atomic_replace)
+    monkeypatch.setattr(repair, "wait_for_wal", lambda _cursor: None)
+    monkeypatch.setattr(
+        repair,
+        "_state_dict",
+        lambda _cursor, symbol, interval: {
+            "rows": 2,
+            "sha256": f"after-{symbol}-{interval}",
+        },
+    )
+
+    def derive(*, symbol):
+        if symbol == failed_symbol:
+            raise RuntimeError(f"derive failed for {symbol}")
+
+    monkeypatch.setattr(repair, "derive_4h", derive)
+
+    class DB:
+        cursor = object()
+
+        def insert_price_data(self, rows, table):
+            assert table == "stock_data"
+            symbol = rows[0][0]
+            files = list(tmp_path.glob("*_cli.json"))
+            assert len(files) == 1
+            snapshot = json.loads(files[0].read_text(encoding="utf-8"))
+            target = next(
+                item for item in snapshot["targets"]
+                if item["symbol"] == symbol
+            )
+            assert target["status"] == "in_progress"
+            assert target["tail_correction"]["originals"][0]["close"] == 10.5
+            snapshots_at_insert[symbol] = snapshot
+
+    class Collector:
+        def __init__(self):
+            self.db = DB()
+
+        def collect_eod(self, _symbol):
+            return None
+
+        def _store(self, _symbol, _interval, _rows):
+            return None
+
+    plan = _write_ahead_plan(symbols, tmp_path)
+    with pytest.raises(RuntimeError, match=f"derive failed for {failed_symbol}") as caught:
+        repair.apply_plan(
+            plan,
+            Collector(),
+            now=datetime(2026, 10, 4, tzinfo=timezone.utc),
+        )
+
+    record = caught.value.record
+    record_path = Path(record["record_file"])
+    disk_record = json.loads(record_path.read_text(encoding="utf-8"))
+    expected_statuses = ["complete"] * failed_index + ["failed"]
+    assert [target["status"] for target in disk_record["targets"]] == expected_statuses
+    assert disk_record["targets"][-1]["error"] == (
+        f"RuntimeError: derive failed for {failed_symbol}"
+    )
+    assert all(
+        target["tail_correction"]["originals"][0]["close"] == 10.5
+        for target in disk_record["targets"]
+    )
+    assert set(snapshots_at_insert) == set(symbols)
+    assert replacements
+    assert not list(tmp_path.glob("*.tmp"))
 
 
 def test_t13_derive_default_sql_is_unchanged_and_symbol_is_parameterized(monkeypatch):

@@ -272,7 +272,10 @@ def heal_adjustments() -> Dict:
             summary["planned"] = plan["target_count"]
             summary["deferred"] = plan["deferred"]
             record = apply_plan(plan, collector)
-            summary["applied"] = len(record["targets"])
+            summary["applied"] = sum(
+                target.get("status") == "complete"
+                for target in record["targets"]
+            )
             if record.get("record_file"):
                 summary["record_file"] = record["record_file"]
             for target in record["targets"]:
@@ -282,14 +285,20 @@ def heal_adjustments() -> Dict:
                 )
     except RateLimitedError as exc:
         record = getattr(exc, "record", {})
-        summary["applied"] = len(record.get("targets", []))
+        summary["applied"] = sum(
+            target.get("status") == "complete"
+            for target in record.get("targets", [])
+        )
         if record.get("record_file"):
             summary["record_file"] = record["record_file"]
         summary["error"] = f"RateLimitedError: {exc}"
         log.error(f"Adjustment heal berhenti karena rate limit: {exc}")
     except Exception as exc:
         record = getattr(exc, "record", {})
-        summary["applied"] = len(record.get("targets", []))
+        summary["applied"] = sum(
+            target.get("status") == "complete"
+            for target in record.get("targets", [])
+        )
         if record.get("record_file"):
             summary["record_file"] = record["record_file"]
         summary["error"] = f"{type(exc).__name__}: {exc}"
